@@ -9,6 +9,11 @@ Plotting/reporting live in `deepscale.plotting` and `deepscale.reporting`. Impor
 | Tercile forecast `(tercile, lat, lon)` | `ds.plot_terciles(fc)` — IRI-style dominant-tercile map |
 | Two tercile forecasts to compare | `ds.plot_tercile_comparison(fc, reference)` |
 | Deterministic field `(lat, lon)` (ensemble mean, anomaly, ...) | `ds.plot_field(...)` / `plot_deterministic_forecast(...)` |
+| Any gridded field `(lat, lon)` — percentile / rank / SPI map, with country outlines or class bins | `ds.plot_field_map(da, classes=..., highlight=..., boundaries=...)` |
+| Per-region values `(region,)` (from `rosetta.zonal`) + admin geometries | `ds.plot_choropleth(values, geometries, by=...)` |
+| A `CompletionResult` (analog scenario completion) | `ds.plot_accumulation_scenarios(result)` |
+| Two index series against each other (SST vs rainfall, coloured by outcome) | `ds.plot_index_scatter(x, y, color_by=...)` |
+| Styled tercile map onto your own subplot `ax` | `ds.render_styled_terciles(ax, probs, style)` |
 | `SkillReport` with `spatial=True` | `plot_skill_maps(report, ["rpss", ...])`; full PDF: `report.to_pdf(...)` |
 | CV tercile hindcasts + obs | `plot_reliability_diagram(cv_terc, obs)` |
 | `ComparisonReport` from `skill_compare` | `.to_table()` / `.to_heatmap(path)` / `.to_pdf(path)` |
@@ -23,6 +28,12 @@ Plotting/reporting live in `deepscale.plotting` and `deepscale.reporting`. Impor
 ds.plot_terciles(...)            # = plotting.forecasts.plot_tercile_forecast
 ds.plot_field(...)
 ds.plot_tercile_comparison(...)
+ds.render_styled_terciles(...)   # = plotting.forecasts.render_styled_terciles
+ds.plot_field_map(...)           # = plotting.maps.plot_field_map
+ds.plot_choropleth(...)          # = plotting.maps.plot_choropleth
+ds.natural_earth_borders(...)    # = plotting.maps.natural_earth_borders
+ds.plot_accumulation_scenarios(...)  # = plotting.scenarios.plot_accumulation_scenarios
+ds.plot_index_scatter(...)           # = plotting.scenarios.plot_index_scatter
 ```
 
 ## Forecast maps
@@ -43,7 +54,75 @@ plot_tercile_comparison(forecast, reference, *, style=None, axes=None,
 plot_deterministic_forecast(det_fcst, *, ax=None, title=None, cmap="RdBu_r", center=None)
 plot_exceedance_probability(exceedance_prob, threshold, *, ax=None)
 plot_flex_pdf(fcst_mu, fcst_scale, climo_mu, climo_scale, *, location, ax=None)  # location=(lon, lat)
+render_styled_terciles(ax, probs, style, *, title=None, small=False)  # -> ax
+    # thin wrapper over plot_tercile_forecast(style=) for multi-panel grids;
+    # small=True drops the legend and axis ticks. probs is (tercile, lat, lon).
 ```
+
+## General field maps, choropleths, and monitoring plots
+
+Not forecast-specific: render any gridded field, any per-region value, or the analog-completion
+outputs. `plot_field_map` and `plot_choropleth` return a matplotlib `Figure`.
+
+```python
+plot_field_map(da, *, ax=None, cmap=None, vmin=None, vmax=None, classes=None, clip=None,
+               highlight=None, highlight_label="driest on record", boundaries=None,
+               title=None, cbar_label=None, figsize=(8, 7))
+```
+Render a 2-D `(lat, lon)` field (reduce extra dims first). `classes=(bounds, colors[, labels])` is a
+generic **discrete-classification** mechanism — `bounds` is N+1 breakpoints, `colors` the N fills,
+optional `labels` the class names; draws a stepped colour bar (overrides `cmap`/`vmin`/`vmax`) and
+matches how operational rank/percentile maps are shown. `clip` (shapefile / GeoDataFrame / geometry)
+masks cells outside a region to NaN (multi-feature inputs dissolved to their union). `highlight`
+overpaints cells equal to a value in one saturated colour — the "driest on record" convention, e.g.
+`highlight=1` over a `ds.rank_of_record(...)` field. `boundaries` (a GeoDataFrame/GeoSeries, e.g. from
+`natural_earth_borders`) overlays admin outlines. Without `classes`, a field that looks like a
+fraction (`[0,1]`) defaults to a sequential percentile colormap on `[0,1]`.
+
+```python
+plot_choropleth(values, geometries, *, by=None, ax=None, cmap=None, vmin=None, vmax=None,
+                classes=None, missing_color="#e8e8e8", edgecolor="#ffffff", linewidth=0.2,
+                title=None, cbar_label=None, figsize=(8, 8))
+```
+Fill admin polygons by a per-`region` value. `values` is indexed by a `region` dim (e.g.
+`rosetta.zonal` output); `geometries` is a GeoDataFrame (one row per region); `by` is the geometry
+column matching `values`'s `region` labels (defaults to the GeoDataFrame index). `classes` works as
+in `plot_field_map`. `missing_color` fills regions with no value (drawn, not dropped, so no holes).
+
+```python
+natural_earth_borders(region=None, *, scale="50m") -> GeoDataFrame
+```
+Load Natural Earth admin-0 country polygons (EPSG:4326) for use as `plot_field_map(boundaries=...)`.
+Reads cartopy's cached shapefile **without importing cartopy** (works on a plain-matplotlib install);
+`region=[lat_s, lat_n, lon_w, lon_e]` keeps only intersecting countries, `scale` ∈ `"50m"`/`"10m"`.
+Raises `FileNotFoundError` if the cached shapefile is absent (install cartopy once to populate it).
+
+```python
+plot_accumulation_scenarios(result, *, ax=None, reduce=None, show_consensus=True,
+                            color_by_scenario=False, climatology=None, title=None,
+                            ylabel="accumulation", figsize=(9, 5.5))
+```
+Plot the accumulation curves of a `CompletionResult` (observed → forecast → each analog fanning out).
+Its `scenarios` must reduce to a single series — select a pixel/region first
+(`result.scenarios.sel(region=...)`) or pass `reduce=lambda da: da.mean(["lat", "lon"])`.
+`show_consensus` draws the analog-median accumulation; `color_by_scenario` gives one colour per
+analog year; pass `climatology` (the result's own `(year, step, …)` archive) to draw the
+climatological-median reference. Returns a `Figure`.
+
+```python
+plot_index_scatter(x, y, *, ax=None, color_by=None, categories=None, colors=None,
+                   highlight=None, highlight_color=None, forecast=None, forecast_marker="*",
+                   forecast_color="#f2c14e", forecast_label="Forecast", error_bars=None,
+                   trendline=False, trendline_annotate=True, labels=False,
+                   xlabel=None, ylabel=None, title=None, figsize=(7, 6))
+```
+Scatter two index series (`x`, `y` over `year`, aligned on their intersection). `color_by` is a
+categorical series over `year` (e.g. observed rainfall tercile) — colours the points, turning a
+scatter of ocean states into a statement about rainfall outcomes. `highlight` (a list of years, e.g.
+the analogs) draws heavier annotated markers (`highlight_color` fills them, else an open ring).
+`forecast=(x, y)` draws the forecast year as a star; `error_bars=(x_bounds, y_bounds)` — each an
+`ErrorBounds` or `(lower, upper)` pair — brackets it. `trendline` adds an OLS fit (with R² if
+`trendline_annotate`). Returns a `Figure`.
 
 ## Diagnostics
 

@@ -1,6 +1,6 @@
 ---
 name: deepscale
-description: Downscale, calibrate, ensemble, and verify seasonal climate forecasts with the accord-deepscale Python package. Use when bias-correcting or downscaling GCM hindcasts (BCSD, CCA, quantile mapping), producing tercile (below/normal/above) probability forecasts, calibrating with ensemble regression or logistic/WVG indices, building multi-model ensembles, computing skill metrics (RPSS, ROC, reliability), running the seasonal_mme PyCPT-style pipeline, or generating SVSLRF verification reports and forecast maps.
+description: Downscale, calibrate, ensemble, and verify seasonal climate forecasts with the accord-deepscale Python package. Use when bias-correcting or downscaling GCM hindcasts (BCSD, CCA, quantile mapping), producing tercile (below/normal/above) probability forecasts, calibrating with ensemble regression or logistic/WVG indices, building multi-model ensembles, computing skill metrics (RPSS, ROC, reliability), running the seasonal_mme PyCPT-style pipeline, generating SVSLRF verification reports and forecast maps, selecting analog years and completing a partly-observed season into scenarios (SMPG), positioning seasonal totals in a historical record (percentile / rank-of-record), computing teleconnection indices (Niño, ONI, RONI, DMI/IOD, WVG), or testing predictor significance (permutation test, FDR).
 license: MIT
 metadata:
   author: accord-research
@@ -77,7 +77,32 @@ result.tercile_forecast; result.skill_report.scores; result.metadata
 | `ds.prediction_error_variance(cv_preds, obs)` | Per-cell PEV from CV residuals | `(lat,lon)` |
 | `ds.flex_forecast(det_fcst, pev, obs, threshold)` | Exceedance probability P(Y > threshold) | `FlexForecastResult` |
 
-Downscale methods: `bcsd`, `cca`, `qm`, `dqm`, `delta`, `climatology`, `rank-analog`, `corrdiff` (GPU). Ensemble strategies: `uniform`, `skill_weighted`, `bma`, `drop_worst`. CV schemes: `loyo`, `lko`, `blocked`, `expanding`. Metrics: `rpss`, `roc`, `groc`, `reliability`, `hss`, `pearson_r`, `spearman`, `2afc`, `rmse`, `msss`, `crpss`, `spread_error_ratio`, `spread_error_correlation` (+ presets `"svslrf"`, `"all"`). Full parameter tables: [references/methods.md](references/methods.md), [references/metrics-and-terciles.md](references/metrics-and-terciles.md).
+Downscale methods: `bcsd`, `cca`, `qm`, `dqm`, `delta`, `climatology`, `rank-analog`, `corrdiff` (GPU). Ensemble strategies: `uniform`, `skill_weighted`, `bma`, `drop_worst`. CV schemes: `loyo`, `lko`, `blocked`, `expanding`. Metrics: `rpss`, `roc`, `groc`, `reliability`, `hss`, `pearson_r`, `spearman`, `2afc`, `rmse`, `msss`, `crpss`, `spread_error_ratio`, `spread_error_correlation` (+ presets `"svslrf"`, `"all"`). Also exported: `ds.seasonal_coefficients` — the fitted Kharin-2017 seasonally-smoothed regression coefficient field behind the `smoothed_regression` calibrator (see [references/methods.md](references/methods.md)). Full parameter tables: [references/methods.md](references/methods.md), [references/metrics-and-terciles.md](references/metrics-and-terciles.md).
+
+## Analog completion & climate positioning (SMPG)
+
+A second workflow, alongside the downscale/calibrate pipeline: pick the past years that resemble the one being forecast, splice a partly-observed season forward with each, and say where the result falls in the record. All pure xarray, all agnostic to whether the dims are `(lat, lon)`, `(region,)`, or a single series — full detail in [references/analog-completion.md](references/analog-completion.md).
+
+```python
+import deepscale as ds
+clim = ds.seasonal_stack(archive, "JJAS")               # (time,…) -> (year, step, …) season-aligned
+nino = ds.Index.named("nino34").reduce(sst_hcst)        # a teleconnection index series over year
+analogs = ds.analogs_from_index(nino, target=1.4, n=9)  # the 9 years most like a forecast Niño3.4 of 1.4
+result = ds.complete(observed_to_date, analogs, climatology=clim,
+                     season="JJAS", forecast=next_30_days)  # -> CompletionResult
+result.consensus; result.percentile; result.accumulation()  # median outcome + where it sits + curves
+ds.plot_accumulation_scenarios(result, climatology=clim)
+```
+
+- **Analog selection** (`ds.analogs_from_years / _from_index / _from_field / where`) → an `AnalogSet` (scores every candidate, composes with `&` `|` `.top(n)`).
+- **Climate positioning** (`ds.percentile_of`, `ds.rank_of_record`, `ds.frequency_below`, `ds.accumulate`, `ds.seasonal_reduce`, `ds.seasonal_stack`) → where a value sits in a reference record.
+- **Scenario completion** (`ds.complete` → `CompletionResult`) → one plausible end-of-season per analog; omit `forecast=` and run twice to isolate what a dynamic forecast adds.
+- **Scalar-series calibration** (`ds.quantile_map`, `ds.error_bounds`) → bias-correct / bracket a forecast index, not a field.
+- **Teleconnection indices** (`ds.Index`) now cover `wvg`, `wvg2`, `nino12/3/34/4`, `oni`, `roni`, `dmi` (`iod`), `wtio`, `setio`, `wio`, `wpac`, with configurable `transform=` (`"standardize"`/`"anomaly"`/`"raw"`), `weights=` (`"cos_lat"`), and `baseline=` — see [references/api.md](references/api.md).
+- **Combine & mask** (`ds.combine_terciles`, `ds.mask_by_skill`, `ds.dry_mask`) and **pool** (`ds.pool_ensembles`) — see [references/methods.md](references/methods.md).
+- **Predictor significance** (`ds.loo_corr`, `ds.permutation_test`, `ds.fdr`) — see [references/metrics-and-terciles.md](references/metrics-and-terciles.md).
+
+Calendar helpers (`deepscale.time.season_step`, `season_bounds`, dekad/pentad arithmetic) are module-qualified — reference them as `deepscale.time.<fn>`, not `ds.<fn>`.
 
 ## Critical discipline rules
 
@@ -87,6 +112,7 @@ Downscale methods: `bcsd`, `cca`, `qm`, `dqm`, `delta`, `climatology`, `rank-ana
 4. **Don't nest `optimize()` inside a CV loop** — double CV plus non-consecutive inner years breaks the CV schemes. Use `train()` + `.predict()` in manual loops (see quick start).
 5. **`primary_metric` must be a leaf metric** — `roc_an`, not `roc` (which expands to a dict).
 6. **DL methods** (`requires_training=True`) refuse inline fitting: `ds.train(name, ..., save_to=path)` then `ds.downscale(..., weights_path=path)`.
+7. **Mask discipline when comparing forecasts:** RPSS masks its climatology reference only where *obs* is NaN, so forecasts with different NaN footprints are silently scored over different cell sets (a uniform-1/3 forecast has scored +0.26 this way). Apply one common valid mask to every forecast and the obs before scoring, and self-check that a uniform `[1/3,1/3,1/3]` forecast scores ≈ 0 — see [references/metrics-and-terciles.md](references/metrics-and-terciles.md).
 
 ## Getting data in (rosetta)
 
@@ -118,11 +144,14 @@ obs = rosetta.fetch("obs/era5", "precip", region=[-5, 15, 33, 48],
 - [examples/seasonal_mme_pipeline.py](examples/seasonal_mme_pipeline.py) — one-call multi-model MME with `seasonal_mme`
 - [examples/calibration.py](examples/calibration.py) — eReg multi-model calibration, logistic/WVG index calibration, and season-aware smoothed_regression (deterministic + tercile)
 - [examples/ensemble_and_reporting.py](examples/ensemble_and_reporting.py) — strategies, safeguards, skill comparison, plots
+- [examples/smoothed_calibration.py](examples/smoothed_calibration.py) — Kharin-2017 function layer in a manual honest-CV loop: gamma→normal, fit/smooth a·b, CRPSS
+- [examples/analog_completion.py](examples/analog_completion.py) — SMPG workflow: seasonal_stack → analogs_from_index/where → complete → CompletionResult (consensus, percentile, rank-of-record)
 
 ## Reference files
 
-- [references/api.md](references/api.md) — full signatures for every public function/dataclass
-- [references/methods.md](references/methods.md) — downscale methods, calibrators, ensemble strategies, CV schemes, registries
-- [references/metrics-and-terciles.md](references/metrics-and-terciles.md) — every metric's semantics + tercile conversion discipline
-- [references/plotting-reporting.md](references/plotting-reporting.md) — which plot for which artifact, forecast/skill maps, diagrams, SVSLRF PDFs, GeoTIFF/NetCDF export, headless figure handling
-- [references/troubleshooting.md](references/troubleshooting.md) — error → cause table, environment/install setup, test markers, operational scripts
+- [references/api.md](references/api.md) — full signatures for the core forecasting verbs/dataclasses and the generalized `Index`
+- [references/analog-completion.md](references/analog-completion.md) — SMPG subsystem: analog selection, scenario completion, climate positioning, scalar-series calibration, calendar/season-step utilities
+- [references/methods.md](references/methods.md) — downscale methods, calibrators, ensemble strategies (+ `pool_ensembles`), tercile combination/masking (`combine`), CV schemes, registries
+- [references/metrics-and-terciles.md](references/metrics-and-terciles.md) — every metric's semantics + tercile conversion discipline + predictor-significance tools
+- [references/plotting-reporting.md](references/plotting-reporting.md) — which plot for which artifact, forecast/skill maps, field maps & choropleths, scenario/index plots, SVSLRF PDFs, GeoTIFF/NetCDF export, headless figure handling
+- [references/troubleshooting.md](references/troubleshooting.md) — error → cause table, environment/install setup, test markers, operational scripts, convention caveats

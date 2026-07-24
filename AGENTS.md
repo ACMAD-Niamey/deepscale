@@ -13,9 +13,11 @@ The skill is a snapshot of the source. Any change that alters observable behavio
 | If you change... | You must update... |
 |---|---|
 | Public verb signatures/behavior (`downscale`, `optimize`, `train`, `calibrate`, `ensemble`, `skill`, `skill_compare`, `seasonal_mme`, `flex_forecast`, ...) or result dataclasses | `skills/deepscale/SKILL.md` + `skills/deepscale/references/api.md` |
-| Methods, calibrators, ensemble strategies, CV schemes (add/remove/rename, parameter changes) | `skills/deepscale/references/methods.md` |
-| Metrics, tercile conversion, boundaries | `skills/deepscale/references/metrics-and-terciles.md` |
-| Plotting/reporting functions or export formats | `skills/deepscale/references/plotting-reporting.md` |
+| `Index` (`indices.py`): named indices, `REGIONS`, `transform`/`weights`/`baseline`, `reduce` signature | `skills/deepscale/references/api.md` |
+| Analog selection (`analog.py`), scenario completion (`completion.py`), climate positioning (`climate.py`), scalar-series calibration (`series.py`), calendar/season-step utilities (`time.py`) | `skills/deepscale/references/analog-completion.md` (+ `SKILL.md` "Analog completion & climate positioning") |
+| Methods, calibrators, ensemble strategies, CV schemes, `pool_ensembles` (`ensemble.py`), tercile combination/masking (`combine.py`) — add/remove/rename, parameter changes | `skills/deepscale/references/methods.md` |
+| Metrics, tercile conversion, boundaries, significance tools (`metrics/significance.py`, `metrics/cross_validation.py`) | `skills/deepscale/references/metrics-and-terciles.md` |
+| Plotting/reporting functions or export formats — incl. `plotting/maps.py`, `plotting/scenarios.py`, `plotting/forecasts.py` | `skills/deepscale/references/plotting-reporting.md` |
 | Error messages, extras, environment requirements | `skills/deepscale/references/troubleshooting.md` |
 | Rosetta integration / input data shapes | `skills/deepscale/SKILL.md` ("Getting data in") |
 | Anything user-facing | `README.md` if it covers the topic |

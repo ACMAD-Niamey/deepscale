@@ -1,6 +1,8 @@
 # DeepScale API reference
 
-Import name: `deepscale` (distribution: `accord-deepscale`). `__all__`: `downscale, train, optimize, ensemble, skill, SkillReport, skill_compare, ComparisonReport, prediction_error_variance, flex_forecast, FlexForecastResult, seasonal_mme, SeasonalMMEResult, Index, calibrate, LogitConfig, write_terciles, tercile_mae, plot_terciles, plot_field, plot_tercile_comparison`. Importing the package registers all methods/metrics/strategies.
+Import name: `deepscale` (distribution: `accord-deepscale`). `__all__`: `downscale, train, optimize, ensemble, pool_ensembles, skill, SkillReport, skill_compare, ComparisonReport, prediction_error_variance, flex_forecast, FlexForecastResult, seasonal_mme, SeasonalMMEResult, Index, calibrate, LogitConfig, accumulate, frequency_below, percentile_of, rank_of_record, seasonal_reduce, seasonal_stack, AnalogSet, analogs_from_years, analogs_from_index, analogs_from_field, analogs_where, complete, CompletionResult, quantile_map, error_bounds, ErrorBounds, seasonal_coefficients, write_terciles, tercile_mae, combine_terciles, mask_by_skill, dry_mask, loo_predict, loo_corr, permutation_test, fdr, plot_terciles, plot_accumulation_scenarios, plot_index_scatter, plot_field_map, plot_choropleth, natural_earth_borders, TercileStyle, plot_field, render_styled_terciles, plot_tercile_comparison`. Importing the package registers all methods/metrics/strategies.
+
+The analog-selection / scenario-completion / climate-positioning verbs (`AnalogSet`, `analogs_*`, `complete`/`CompletionResult`, `seasonal_stack`, `seasonal_reduce`, `accumulate`, `percentile_of`, `frequency_below`, `rank_of_record`, `quantile_map`, `error_bounds`) form the SMPG subsystem — full signatures and semantics live in [analog-completion.md](analog-completion.md). `combine_terciles`/`mask_by_skill`/`dry_mask` and `pool_ensembles` are documented in [methods.md](methods.md); the significance metrics (`loo_predict`, `loo_corr`, `permutation_test`, `fdr`) in [metrics-and-terciles.md](metrics-and-terciles.md); all plotting in [plotting-reporting.md](plotting-reporting.md). This file covers the core forecasting verbs and the generalized `Index` below.
 
 ## `downscale()`
 
@@ -107,6 +109,7 @@ def skill(forecast, obs, metrics=None, spatial=False, **kwargs) -> SkillReport
 
 - `metrics`: `None` (→ `["rpss"]`), a name, a preset (`"svslrf"` → rpss/roc/reliability; `"all"` → every registered metric, shape-incompatible ones skipped with `RuntimeWarning`), or a list.
 - `spatial=True`: per-cell maps in `.spatial`, scalar means in `.scores`.
+- Extra `**kwargs` are forwarded to every metric's `compute()` — this is how per-metric options like `loo_boundaries=True`, `cv_window=3`, `bounded=True` (RPSS) or `n_bins` (reliability) are passed through `skill()`.
 
 ```python
 @dataclass
@@ -187,21 +190,49 @@ class SeasonalMMEResult:
     metadata: dict   # years_used, forecast_year, cv, method, tercile_method, n_members, run_at, ...
 ```
 
-## `Index` (teleconnection indices)
+## `Index` (teleconnection / climate indices)
+
+An index is three choices — *which boxes*, *how each box is transformed*, and *how the transformed boxes combine*. Name those three and almost every operational teleconnection index falls out of the same machinery. Nothing here is SST-specific: the boxes are just regions and the field is just a field (e.g. `wpac` runs on precipitation).
 
 ```python
 @dataclass(frozen=True)
 class Index:
     name: str
     regions: Mapping[str, object]
+    _combine: Callable[[dict], xr.DataArray]
+    transform: str | Mapping[str, str] = "standardize"   # "standardize" | "anomaly" | "raw", or {region: mode}
+    weights: object = None                                # None | "cos_lat" | xr.DataArray
+    baseline: object = None                               # (start, end) tuple or slice restricting the transform reference
+
     @classmethod
-    def named(cls, name) -> Index        # "wvg" (3-box), "wvg2" (2-box), "nino34", "nino4"
+    def named(cls, name, **overrides) -> Index
     @classmethod
-    def custom(cls, *, name, regions, combine) -> Index
-    def reduce(self, sst, climatology=None) -> xr.DataArray  # scalar index series
+    def custom(cls, *, name, regions, combine,
+               transform="standardize", weights=None, baseline=None) -> Index
+    @staticmethod
+    def list_named() -> dict[str, str]                    # {name: one-line description}
+    def reduce(self, field=None, climatology=None, *, baseline=None, sst=None) -> xr.DataArray
 ```
 
-Reduces an SST field to a scalar index series. WVG (Western-V Gradient, Funk et al.), 3-box: `z(nino34) - (z(wnp) + z(wep) + z(wsp)) / 3`. Standardization uses the `climatology` reference's mean/std — pass the hindcast SST as `climatology` when reducing a forecast year so both share a scale. Named boxes (lat_s, lat_n, lon_w, lon_e; 0-360 lon, `reduce` handles either convention): nino34 `(-5,5,190,240)`, nino4 `(-5,5,160,210)`, wep `(-15,20,120,160)`, wnp `(20,35,160,210)`, wsp `(-30,-15,155,210)`. Regions accept bboxes; shapefile/geometry regions require rosetta.
+- **`transform`** — how each box series is transformed before `combine` sees it: `"standardize"` (default, z-score against the reference — the back-compatible behaviour), `"anomaly"` (subtract the reference mean, keeping physical units), or `"raw"` (untouched). A `{region: mode}` mapping sets it per box; regions omitted from a partial mapping default to `"standardize"`. An unknown region name in the mapping raises `ValueError`.
+- **`weights`** — `None` (default, plain box mean), `"cos_lat"` (area-weight by cos of latitude — matters for tall regions like RONI's 40°-tall tropical band), or an explicit `xr.DataArray`. The default stays unweighted so the WVG family keeps matching the operational ICPAC / WASS2S references.
+- **`baseline`** — restricts the reference used by `standardize`/`anomaly` to a period, e.g. `(1991, 2020)` (WMO) or a `slice`. Ignored by `"raw"`. A `reduce(..., baseline=)` argument overrides the index's own `baseline`.
+
+**`reduce(field, climatology=None, *, baseline=None)`** reduces a gridded field (lat/lon aliases accepted; a `member` dim is averaged out; despite the name it need not be SST) to a 1-D series over the field's time/year dim, or a scalar if it has none. Pass the hindcast as `climatology` when reducing a forecast year so both indices share a scale; it defaults to `field` itself. An **all-`"raw"`** index consults no reference, so it works with no `climatology` even on a single time-less forecast map (e.g. the `>29 °C` `wio` threshold). The first positional argument was renamed `sst → field`; the old `sst=` keyword still works but emits a `DeprecationWarning` (and passing both raises).
+
+**Named indices** (`Index.list_named()` for the live set): `wvg`, `wvg2` (Western-V Gradient, 3-/2-box, standardized+unweighted — ICPAC primary), `nino12`, `nino3`, `nino34`, `nino4` (standardized+unweighted bare Niño boxes), `oni` (Niño3.4 anomaly, °C; anomaly+cos_lat — apply a 3-month running mean upstream for the operational ONI), `roni` (Niño3.4 anomaly minus 20°S–20°N mean, °C; anomaly+cos_lat), `dmi` / alias `iod` (Dipole Mode Index, °C; anomaly+cos_lat), `wtio`, `setio` (IOD pole SST anomalies; anomaly+cos_lat), `wio` (western Indian Ocean SST in absolute units; raw+cos_lat — for thresholds), `wpac` (standardized equatorial West Pacific field mean; also runs on precip as a Walker-circulation indicator). The WVG family and bare Niño indices deliberately keep standardize/unweighted so operational values are unchanged. `Index.named(name, **overrides)` may override `transform`/`weights`/`baseline`, e.g. `Index.named("roni", baseline=(1991, 2020))`.
+
+**`Index.custom(*, name, regions, combine, transform=..., weights=..., baseline=...)`** — `regions` values may each be a bbox list `[lat_s, lat_n, lon_w, lon_e]`, a `{"south":…, "north":…, "west":…, "east":…}` mapping, or the **name of a box in `deepscale.indices.REGIONS`**. Shapefile paths / shapely geometries work only if Rosetta is installed. `combine` receives the transformed regional series keyed by region name, e.g. WVG is `lambda z: z["nino34"] - (z["wnp"] + z["wep"] + z["wsp"]) / 3`.
+
+Box definitions live in `deepscale.indices.REGIONS` (a dict of `{south, north, west, east}` in 0–360 lon; `reduce` normalizes whatever convention the field uses). Neither `REGIONS` nor `Index.list_named` is in the top-level `__all__`.
+
+## `seasonal_coefficients()` (Kharin 2017 smoothed regression slopes)
+
+```python
+def seasonal_coefficients(predictor_hindcast, obs, temporal_sigma=None) -> xr.DataArray
+```
+
+Per-gridpoint ensemble-mean regression slope `a = Cov(Fbar, O)/Var(Fbar)` as a function of the seasonal cycle. Inputs `(season, year, member, lat, lon)` / `(season, year, lat, lon)` on the same grid → coefficient `(season, lat, lon)`. `temporal_sigma`: `None` (per-season, unsmoothed), a float (cyclic Gaussian smoothing across the season axis), or `"constant"` (a single pooled time-invariant slope — a pooled regression over all seasons, not the large-sigma limit). The probabilistic companion functions live in `deepscale.methods.smoothed_regression` — see `references/methods.md`.
 
 ## IO helpers
 
@@ -214,11 +245,15 @@ def tercile_mae(probs, reference) -> float
 
 ## Public but not in `__all__`
 
+- `deepscale.time.{season_step, season_bounds, season_months, season_times, infer_cadence, dekad_start_for, dekad_window, dekad_of_year, dekads_for_issuance, pentad_start_for, pentad_window}` — season-step alignment + dekad/pentad calendar arithmetic. Reference module-qualified (`deepscale.time.season_step`). See `references/analog-completion.md`.
+- `deepscale.indices.REGIONS` (box definitions dict) and `deepscale.indices.Index.list_named()` — public, module-qualified only.
+- `deepscale.metrics.leverage(x)` — simple-regression leverage `h_i`, alongside the top-level `loo_predict`/`loo_corr`; see `references/metrics-and-terciles.md`.
 - `deepscale.tercile.{to_tercile, to_tercile_cv, cpt_tercile_forecast}` — see `references/metrics-and-terciles.md`.
 - `deepscale.cv.{loyo, lko, blocked, expanding, get_cv}` — see `references/methods.md`.
 - `deepscale.registry.{register_method, register_calibrator, register_metric, register_strategy, get_method, get_metric, get_strategy, ...}` — extension points.
 - `deepscale.methods.base.{MethodBase, ProbabilisticMethodBase}` — subclass + `register_method` to add a method; `ProbabilisticMethodBase` adds `predict_distribution()`.
 - `deepscale.logistic.logistic_forecast(...)` — low-level per-cell logistic engine.
-- `deepscale.seasonal_coefficients(hindcast, obs, temporal_sigma=None)` — the fitted, season-smoothed `smoothed_regression` coefficient field `(season, lat, lon)`, for inspection or plotting. See `references/methods.md`.
 - `deepscale.metrics.spread_error.spread_error_diagnostics(forecast, obs, *, spatial=False)`.
+- `deepscale.methods.smoothed_regression.{fit_gamma, gamma_to_normal, normal_to_gamma, fit_ab, fit_ab_field, smooth_ab, normal_category_probs}` — the Kharin-2017 probabilistic calibration pipeline; see `references/methods.md`.
+- `deepscale.metrics.crpss.{crps_normal, crps_climatology, crpss}` — Gaussian CRPS building blocks (ndarray in/out) behind the `crpss` metric.
 - `deepscale.plotting.*` — see `references/plotting-reporting.md`.

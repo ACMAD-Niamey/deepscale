@@ -29,8 +29,18 @@
 | `ValueError` from `prediction_error_variance` | `cv_predictions` and `obs` must cover the same set of years |
 | `seasonal_mme` raises about years | Needs ≥ 5 intersection years across obs and all hindcasts |
 | Whole regions NaN in tercile output | Degenerate boundaries (t33 == t67, e.g. dry cells) or uncalibratable cells (eReg < 3 finite years; logit < `min_years`) — masked by design |
+| `ValueError`: crpss expects a Gaussian forecast with 'mu' and 'sigma' | The `crpss` metric takes an `xr.Dataset` of anomaly `mu`/`sigma`, not a field or tercile array — see `metrics-and-terciles.md` |
+| `DeprecationWarning`: `Index.reduce(sst=...)` | The first positional argument is now `field` (the reduction is not SST-specific); pass `field=` — the old `sst=` still works for now. See `references/api.md` |
+| `ValueError` from `complete`: climatology must have 'year' and 'step' dims | The analog source / climatology must be season-aligned — run it through `deepscale.seasonal_stack(...)` first. See `references/analog-completion.md` |
+| `ValueError` from `percentile_of` / `frequency_below`: value must not / must carry the reduction dim | `percentile_of`/`rank_of_record` take a `values` array *without* `dim`; `frequency_below` takes a `sample` array *with* `dim`. See `references/analog-completion.md` |
+| `KeyError`: Unknown index | `Index.named(...)` accepts `wvg, wvg2, nino12, nino3, nino34, nino4, oni, roni, dmi (iod), wtio, setio, wio, wpac` — call `deepscale.indices.Index.list_named()` for the current set |
 
 If a "wrong result" (rather than an error) is the problem, first check the discipline rules in `metrics-and-terciles.md` — leakage and metric/forecast mismatches produce plausible-looking but invalid skill numbers.
+
+## Known convention caveats
+
+- **Empirical QM convention:** deepscale's empirical `qm` maps values directly through sorted historical columns (direct-CDF), whereas xsdba-style implementations apply *additive adjustment factors* (`ref_q − hist_q` interpolated). The conventions genuinely differ and direct-CDF is sample-hungry — with short training windows the parametric variant (`variant="parametric"`) or a longer window closes most of the gap. The default is kept for backward stability.
+- **Series `quantile_map` clamps by default:** the top-level `deepscale.quantile_map` (scalar/series bias-correction, `references/analog-completion.md`) defaults to `extrapolate="clamp"`, which silently truncates a forecast of a record-breaking value down to the strongest event in the training record. Pass `extrapolate="linear"` (or `variant="parametric"`) when a new extreme must be allowed to exceed the historical range.
 
 ## Operational scripts (where to look; not covered in depth by this skill)
 

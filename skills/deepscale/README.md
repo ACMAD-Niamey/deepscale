@@ -10,10 +10,11 @@ A skill is just a directory of Markdown and example files — no code runs from 
 deepscale/
 ├── SKILL.md                          # entry point: frontmatter + core instructions
 ├── references/
-│   ├── api.md                        # full signatures for every public function
-│   ├── methods.md                    # downscale methods, strategies, CV schemes
-│   ├── metrics-and-terciles.md       # metric semantics + leakage discipline
-│   ├── plotting-reporting.md         # maps, SVSLRF PDFs, export
+│   ├── api.md                        # core forecasting verbs + generalized Index
+│   ├── analog-completion.md          # SMPG: analog selection, scenario completion, climate positioning, calendar utils
+│   ├── methods.md                    # downscale methods, strategies, pooling/combining, CV schemes
+│   ├── metrics-and-terciles.md       # metric semantics + leakage discipline + significance tools
+│   ├── plotting-reporting.md         # maps, choropleths, scenario plots, SVSLRF PDFs, export
 │   └── troubleshooting.md            # error→cause table, env setup
 └── examples/                         # runnable scripts
 ```
