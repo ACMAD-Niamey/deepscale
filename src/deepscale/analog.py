@@ -442,7 +442,10 @@ def analogs_where(condition: xr.DataArray, *, scores: xr.DataArray | None = None
     """
     if "year" not in condition.dims:
         raise ValueError(f"condition must have a 'year' dim, got {tuple(condition.dims)}")
-    mask = condition.astype(bool)
+    # Treat NaN as False: `np.nan.astype(bool)` is True, so a raw float condition
+    # with holes would otherwise select the NaN years. Boolean conditions (the
+    # common `nino34 >= 0.5` form) are unaffected.
+    mask = condition.fillna(False).astype(bool)
     years = condition.year.values[mask.values]
     if len(years) == 0:
         raise ValueError("the condition selected no years")

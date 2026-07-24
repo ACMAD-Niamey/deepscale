@@ -24,7 +24,22 @@ from collections.abc import Mapping, Sequence
 import numpy as np
 import xarray as xr
 
+from ._spatial import spatial_dims
+
 _TERCILE = xr.IndexVariable("tercile", [0, 1, 2])   # 0=below, 1=normal, 2=above
+
+
+def _canonical_latlon(da, *, context):
+    """Rename ``da``'s spatial dims to canonical ``lat``/``lon``.
+
+    Resolves the lat/latitude/Y and lon/longitude/X aliases through the shared
+    resolver so ``combine_terciles``/``dry_mask`` accept the same dim names as the
+    rest of deepscale (e.g. ``pool_ensembles``), not lat/lon only.
+    """
+    latd, lond = spatial_dims(da, context=context)
+    if (latd, lond) != ("lat", "lon"):
+        da = da.rename({latd: "lat", lond: "lon"})
+    return da
 
 
 def _as_named_list(components):
@@ -47,6 +62,7 @@ def _target_grid(regrid_to, first):
     if regrid_to is None:
         return first.lat.values, first.lon.values
     if isinstance(regrid_to, xr.DataArray):
+        regrid_to = _canonical_latlon(regrid_to, context="combine_terciles regrid_to")
         return regrid_to.lat.values, regrid_to.lon.values
     lat, lon = regrid_to                     # (lat, lon) arrays
     return np.asarray(lat), np.asarray(lon)
@@ -85,6 +101,7 @@ def combine_terciles(components, weights=None, *, regrid_to=None, renormalize=Tr
     present components) — matching ACMAD's per-cell ``nanmean`` behaviour.
     """
     names, das = _as_named_list(components)
+    das = [_canonical_latlon(d, context="combine_terciles component") for d in das]
 
     if weights is None:
         w = np.ones(len(das), float)
@@ -164,6 +181,7 @@ def dry_mask(climatology, *, threshold, like=None):
     threshold and, if ``like`` is given, regrids the boolean mask onto that grid (nearest-ish via a
     0.5 cut on the interpolated float mask). Returns a bool DataArray.
     """
+    climatology = _canonical_latlon(climatology, context="dry_mask climatology")
     mask = climatology < threshold
     if like is not None:
         lat, lon = _target_grid(like, mask)          # numpy arrays

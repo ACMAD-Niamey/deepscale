@@ -70,6 +70,22 @@ def test_regrid_to_common_grid():
     np.testing.assert_allclose(out.sum("tercile").values, 1.0)
 
 
+def test_accepts_latitude_longitude_dim_aliases():
+    """combine_terciles resolves the lat/latitude/lon/longitude aliases like the
+    rest of deepscale, rather than requiring lat/lon (it previously KeyError'd)."""
+    def _aliased(fill):
+        a = np.empty((3, len(LAT), len(LON)))
+        for k in range(3):
+            a[k] = fill[k]
+        return xr.DataArray(a, dims=("tercile", "latitude", "longitude"),
+                            coords={"tercile": [0, 1, 2], "latitude": LAT, "longitude": LON})
+
+    out = deepscale.combine_terciles([_aliased((0.6, 0.3, 0.1)), _aliased((0.2, 0.3, 0.5))])
+    assert "lat" in out.dims and "lon" in out.dims          # canonicalised on the way out
+    np.testing.assert_allclose(out.sel(tercile=0).values, 0.4)
+    np.testing.assert_allclose(out.sum("tercile").values, 1.0)
+
+
 def test_rejects_bad_weights():
     a = _probs(LAT, LON, (0.5, 0.3, 0.2))
     with pytest.raises(ValueError):

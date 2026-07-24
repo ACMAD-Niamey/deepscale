@@ -246,6 +246,15 @@ def test_where_rejects_a_condition_matching_nothing(nino34):
         analogs_where(nino34 > 99.0)
 
 
+def test_where_treats_nan_in_a_float_condition_as_false():
+    """A raw float condition with holes must not select the NaN years —
+    `np.nan.astype(bool)` is True, so an un-guarded cast would pick them up."""
+    values = np.array([1.0, np.nan, 0.0, 1.0] + [0.0] * (len(YEARS) - 4))
+    condition = _index(values)
+    got = analogs_where(condition)
+    assert sorted(got.years.tolist()) == [YEARS[0], YEARS[3]]
+
+
 # --- composition -----------------------------------------------------------
 
 

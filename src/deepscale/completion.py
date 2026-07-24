@@ -139,6 +139,11 @@ def _weighted_quantile(values: np.ndarray, weights: np.ndarray, q: float, axis: 
 
     span = p_hi - p_lo
     fraction = np.where(span > 0, (q - p_lo) / np.where(span > 0, span, 1.0), 0.0)
+    # Clamp to the bracketing order statistics: for q beyond the outermost
+    # plotting position the interpolation would otherwise extrapolate past the
+    # min/max scenario (fraction < 0 or > 1), and a completion consensus must
+    # never fall outside the range of the analog scenarios it summarises.
+    fraction = np.clip(fraction, 0.0, 1.0)
     out = np.squeeze(v_lo + fraction * (v_hi - v_lo), axis=axis)
     return np.where(np.isnan(values).any(axis=axis), np.nan, out)
 

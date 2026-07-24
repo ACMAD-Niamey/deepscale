@@ -280,6 +280,33 @@ def test_weighted_consensus_moves_toward_the_closest_analog(observed, climatolog
     assert abs(weighted - best_total) < abs(plain - best_total)
 
 
+def test_weighted_quantile_never_leaves_the_data_range():
+    """A weighted quantile at an extreme q must clamp to the outermost scenario,
+    not extrapolate past it. Regression for the upper-tail extrapolation bug
+    (q=0.99 on [10,20,100]/[.6,.3,.1] previously returned ~116 > 100)."""
+    from deepscale.completion import _weighted_quantile
+
+    vals = np.array([10.0, 20.0, 100.0])
+    w = np.array([0.6, 0.3, 0.1])
+    for q in (0.0, 0.01, 0.1, 0.5, 0.9, 0.99, 1.0):
+        out = float(_weighted_quantile(vals, w, q, axis=0))
+        assert vals.min() <= out <= vals.max(), (q, out)
+
+
+def test_weighted_high_quantile_consensus_stays_within_scenarios(observed, climatology):
+    """The end-to-end path: a high-quantile weighted consensus must lie within
+    the span of the analog scenario totals it summarises."""
+    close = analogs_from_index(
+        _index_series(), target=30.0, n=3, candidates=[2010, 2011, 2015]
+    )
+    res = complete(observed, close, climatology=climatology, season=SEASON,
+                   weights="inverse_distance", reduce=0.95)
+    hi = res.totals.max("scenario")
+    lo = res.totals.min("scenario")
+    assert bool((res.consensus <= hi + 1e-9).all())
+    assert bool((res.consensus >= lo - 1e-9).all())
+
+
 def test_weighted_mean_matches_a_hand_computation(observed, climatology):
     close = analogs_from_index(_index_series(), target=30.0, n=3)
     weights = close.weights("inverse_distance")
