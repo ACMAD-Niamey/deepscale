@@ -1,13 +1,18 @@
 name: publish
 
-# Every push to main runs the tests and, if they pass, publishes to PyPI.
-# The version is stamped automatically as 0.1.<build number> so you never edit
-# version numbers by hand. Publishing uses PyPI Trusted Publishing (no tokens).
-# To change the 0.1 base (e.g. to 0.2), edit the sed line in the publish job.
+# PyPI releases are cut MANUALLY, never on a push to main.
+#
+# To release:
+#   1. Bump `version` in pyproject.toml (in a commit to main).
+#   2. Actions tab -> "publish" -> "Run workflow".
+#
+# The job publishes only if that version isn't already on PyPI, so re-running
+# without a version bump is a safe no-op (it fails fast with a clear message).
+# pyproject.toml's `version` is the single source of truth. Publishing uses
+# PyPI Trusted Publishing (no tokens).
 
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:
 
 jobs:
   test:
@@ -32,7 +37,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
-      - name: Stamp a unique version (0.1.<build number>)
-        run: sed -i -E 's/^version = ".*"/version = "0.1.${{ github.run_number }}"/' pyproject.toml
+      - name: Refuse to republish an existing version
+        run: |
+          VERSION=$(grep -E '^version = ' pyproject.toml | head -1 | sed -E 's/version = "(.*)"/\1/')
+          echo "pyproject.toml version: $VERSION"
+          if curl -sf "https://pypi.org/pypi/accord-deepscale/$VERSION/json" > /dev/null; then
+            echo "::error::accord-deepscale $VERSION is already on PyPI — bump 'version' in pyproject.toml first."
+            exit 1
+          fi
+          echo "$VERSION is new on PyPI; proceeding to publish."
       - run: uv build
       - uses: pypa/gh-action-pypi-publish@release/v1
