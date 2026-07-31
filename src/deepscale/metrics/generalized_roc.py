@@ -61,8 +61,20 @@ def _groc_from_flat(y_true_flat, y_score_flat):
     valid = (y_true_flat >= 0) & ~np.isnan(y_score_flat).any(axis=1)
     yt = y_true_flat[valid]
     ys = y_score_flat[valid]
-    if yt.size == 0 or np.unique(yt).size < 2:
+    classes = np.unique(yt)
+    if yt.size == 0 or classes.size < 2:
         return float("nan")
+    if classes.size == 2:
+        # Only two obs categories present (common per-cell on dry-masked
+        # seasonal domains, e.g. below/above with no normal year in a short
+        # record). sklearn's multi_class="ovo" requires every y_score column's
+        # class in y_true and raises otherwise, so compute the single
+        # Hand-&-Till pair directly — the average of the two directed binary
+        # AUCs, exactly what sklearn's ovo evaluates for one pair.
+        lo, hi = int(classes[0]), int(classes[1])
+        a_hi = roc_auc_score((yt == hi).astype(int), ys[:, hi])
+        a_lo = roc_auc_score((yt == lo).astype(int), ys[:, lo])
+        return float(0.5 * (a_hi + a_lo))
     return float(roc_auc_score(yt, ys, multi_class="ovo", average="macro"))
 
 
