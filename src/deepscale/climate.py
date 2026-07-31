@@ -225,7 +225,7 @@ def percentile_of(
         ``climatology``.
     climatology : xr.DataArray
         The reference record, carrying ``dim``.
-    method : {"empirical", "weibull", "gaussian"}
+    method : {"empirical", "weibull", "gaussian", "gamma"}
         ``"empirical"`` is the mid-rank estimator: the fraction strictly below,
         plus half the fraction tied. It is bounded by ``[0, 1]`` and needs no
         distributional assumption. ``"weibull"`` uses the ``rank / (n + 1)``
@@ -233,7 +233,13 @@ def percentile_of(
         the result feeds a transform with infinite tails. ``"gaussian"`` fits a
         normal to the reference and evaluates its CDF, which extrapolates
         beyond the observed range but assumes symmetry (questionable for
-        rainfall).
+        rainfall). ``"gamma"`` is the **conditional (Bernoulli-)Gamma** CDF:
+        a point mass at the dry fraction ``p0`` plus a method-of-moments Gamma
+        fit to the positive amounts, evaluated as
+        ``p0 + (1 - p0) * GammaCDF(x)`` for ``x > 0`` (and ``p0 / 2`` at zero).
+        This is the standard precipitation percentile at the CHC -- right-skewed,
+        non-negative, and handling the zero-rain spike -- and is the appropriate
+        choice for rainfall fields.
 
     Notes
     -----
@@ -249,6 +255,30 @@ def percentile_of(
         std = xr.where(std < 1e-12, np.nan, std)
         z = (values - mean) / std
         return xr.apply_ufunc(norm.cdf, z, dask="parallelized", keep_attrs=False)
+
+    if method == "gamma":
+        # Conditional (Bernoulli-)Gamma: a mass at the dry fraction p0, then a
+        # method-of-moments Gamma on the strictly-positive amounts. The standard
+        # precipitation percentile at the CHC (right-skewed, non-negative, zero-
+        # aware). k = mean^2 / var, theta = var / mean, fit per cell on wet years.
+        from scipy.stats import gamma as _gamma
+
+        wet = climatology.where(climatology > 0)
+        n_valid = climatology.notnull().sum(dim)
+        n_wet = wet.notnull().sum(dim)
+        p0 = 1.0 - n_wet / n_valid.where(n_valid > 0)      # dry-year fraction (zero mass)
+        mean = wet.mean(dim, skipna=True)
+        var = wet.var(dim, skipna=True, ddof=1)
+        var = xr.where(var < 1e-12, np.nan, var)
+        shape = (mean ** 2) / var                          # method-of-moments k
+        scale = var / mean                                 # method-of-moments theta
+        gcdf = xr.apply_ufunc(
+            lambda x, a, s: _gamma.cdf(x, a, scale=s),
+            values, shape, scale, dask="parallelized", keep_attrs=False,
+        )
+        frac = xr.where(values > 0, p0 + (1.0 - p0) * gcdf, 0.5 * p0)
+        frac = frac.where(n_wet >= 2)                       # need >=2 wet years to fit
+        return frac.where(values.notnull())
 
     n_valid = climatology.notnull().sum(dim)
     below = (climatology < values).sum(dim)
