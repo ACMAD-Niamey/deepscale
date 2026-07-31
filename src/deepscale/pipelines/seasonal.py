@@ -510,7 +510,26 @@ def _per_model_cv(hcst, fcst, obs_sliced, *, method, cv_scheme, cpt_args,
     else:
         fold_iter = cv_fn(all_years)
 
-    if method == "cca" and (cpt_args or {}).get("mode_selection") in ("auto", "cpt"):
+    mode_sel = (cpt_args or {}).get("mode_selection")
+    if method == "cca" and mode_sel == "north":
+        # Eigenvalue-spectrum selection (Scree + North's rule), the CPT.x
+        # dry-run approach: one SVD per field, no CV requirement (so no LOYO
+        # restriction), selected per model since this runs inside the per-model
+        # loop. Ceilings reuse the x/y_eof_range upper bounds (ACMAD reference:
+        # 10 for obs-SST predictors, 7 for NMME predictors).
+        from ..methods.cca import select_modes_north
+        xe, ye, cc = select_modes_north(
+            hcst_sliced,
+            obs_sliced,
+            x_ceiling=(cpt_args or {}).get("x_eof_range", (1, 10))[1],
+            y_ceiling=(cpt_args or {}).get("y_eof_range", (1, 10))[1],
+        )
+        method_kwargs.update({
+            "x_eof_modes": xe,
+            "y_eof_modes": ye,
+            "cca_modes": cc,
+        })
+    elif method == "cca" and mode_sel in ("auto", "cpt"):
         if cv_scheme != "loyo":
             raise ValueError(
                 "seasonal_mme: CCA mode_selection='auto' currently requires "
