@@ -927,3 +927,32 @@ def test_groc_alias_registered():
 
     assert get_metric("generalized_roc") is GeneralizedROCMetric
     assert get_metric("groc") is GeneralizedROCMetric
+
+
+def test_groc_two_category_cell_does_not_crash():
+    """A cell whose obs record spans only two tercile categories must yield a
+    finite Hand-&-Till pair AUC, not an sklearn multiclass ValueError (seen
+    live on dry-masked seasonal domains with spatial=True)."""
+    import numpy as np
+    from deepscale.metrics.generalized_roc import _groc_from_flat
+
+    rng = np.random.default_rng(7)
+    n = 24
+    y_true = np.array([0, 2] * (n // 2))              # only below/above present
+    y_score = rng.dirichlet([1.0, 1.0, 1.0], size=n)
+    # make the forecast informative so the AUC is meaningfully > 0.5
+    y_score[y_true == 2, 2] += 1.0
+    y_score[y_true == 0, 0] += 1.0
+    y_score /= y_score.sum(axis=1, keepdims=True)
+    score = _groc_from_flat(y_true, y_score)
+    assert np.isfinite(score)
+    assert 0.5 < score <= 1.0
+
+
+def test_groc_single_category_cell_returns_nan():
+    import numpy as np
+    from deepscale.metrics.generalized_roc import _groc_from_flat
+
+    y_true = np.zeros(10, dtype=int)
+    y_score = np.full((10, 3), 1 / 3)
+    assert np.isnan(_groc_from_flat(y_true, y_score))

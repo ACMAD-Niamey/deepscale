@@ -35,6 +35,16 @@ def _svd_pca(X, n_components):
 
 _SV_RTOL = 1e-10
 
+# Upper clamp for CCAMethod.leverage. Training-point leverage is bounded by 1,
+# but a genuinely extrapolating NEW forecast can exceed it (measured up to ~5 on
+# clean operational data, e.g. a strong-ENSO forecast vs a 30-year training
+# envelope). The clamp sits two orders above that: values beyond it only arise
+# from numerical artefacts (degenerate modes -> ~1e91) or corrupt inputs
+# (cache-poisoned fields -> overflow), both of which previously crashed or
+# collapsed whole MME runs. Clamped models degrade toward climatology (large
+# but finite predictive variance) and a RuntimeWarning names the problem.
+_LEVERAGE_CLAMP = 100.0
+
 
 def _project_by_sv(num, sv):
     """Divide EOF projections by singular values, dropping degenerate modes.
@@ -220,7 +230,28 @@ class CCAMethod(MethodBase):
         x_anom = x_anom * self.x_wt_
         rwk = _project_by_sv(self.eofx_.T @ x_anom.ravel(), self.svx_)
         prjc = self.s_ @ rwk
-        return 1.0 / n + float(np.sum(prjc)) ** 2
+        # Inf-safe square + clamp. Python's float ** raises OverflowError on
+        # huge sums, so a single corrupt forecast field (observed: a cache-
+        # poisoned member with ~1e307 cells -> num ~1e306) crashed whole MME
+        # runs from deep inside the CV loop. Values beyond _LEVERAGE_CLAMP
+        # (set well above legitimate extrapolation, see its comment) are
+        # numerical artefacts of degenerate modes (see _project_by_sv) or
+        # corrupt inputs, so clamp — but WARN loudly first, because a wildly
+        # out-of-envelope forecast usually means broken input data, not weather.
+        with np.errstate(over="ignore"):
+            xvp = 1.0 / n + float(np.square(np.float64(np.sum(prjc))))
+        if not np.isfinite(xvp) or xvp > _LEVERAGE_CLAMP:
+            import warnings
+            warnings.warn(
+                f"CCA leverage {xvp:.3g} exceeds the statistical bound "
+                f"(clamped to {_LEVERAGE_CLAMP}); the forecast is far outside "
+                "the training envelope — check the predictor data for "
+                "corruption (fill values, cache poisoning) before trusting "
+                "this model's contribution.",
+                RuntimeWarning, stacklevel=2,
+            )
+            xvp = _LEVERAGE_CLAMP
+        return xvp
 
     def predict(self, forecast, **kwargs):
         """CPT-compatible prediction (cca.F95 L605-638).
@@ -310,6 +341,69 @@ def _capped_mode_ranges(x_eof_range, y_eof_range, cca_range, n_years, window):
         return (min(lo, max_modes), min(hi, max_modes))
 
     return _cap(x_eof_range), _cap(y_eof_range), _cap(cca_range)
+
+
+def _north_modes(field, ceiling, min_frac_of_mean=1.0):
+    """Retained EOF count for a (year, lat, lon[, member]) field by eigenvalue test.
+
+    Reproduces ACMAD's ``compute_scree_north_test.gs`` (the CPT.x dry-run
+    mode-selection step): do an area-weighted EOF of the field, then keep the
+    leading modes that are both (a) above the *scree* line — individual explained
+    variance exceeds the average ``min_frac_of_mean / n`` — and (b) *North-
+    separated* from the next mode, i.e. the eigenvalue gap exceeds the sampling
+    error ``dlambda = lambda * sqrt(2/N)`` (North et al. 1982, MWR 110, 699-706).
+    Capped at ``ceiling`` and at least 1.
+
+    Anomaly centering and ``sqrt(cos(lat))`` weighting follow the exact
+    conventions of ``_svd_pca`` / ``CCAMethod.fit``, so the eigenvalues examined
+    here are the ones the CCA fit would produce. A ``member`` dim is reduced by
+    its mean first (matching what the CCA is fit on). Cost: one SVD.
+    """
+    da = field.mean("member") if "member" in field.dims else field
+    da = da.transpose("year", "lat", "lon")
+    n = da.sizes["year"]
+    w = np.sqrt(np.cos(np.deg2rad(np.repeat(da.lat.values, da.sizes["lon"]))))
+    a = da.values.reshape(n, -1)
+    good = np.all(np.isfinite(a), axis=0)
+    a = (a[:, good] - a[:, good].mean(0)) * w[good]
+    lam = np.linalg.svd(a, compute_uv=False) ** 2
+    lam = lam[lam > 0]
+    if lam.size == 0:
+        return 1
+    frac = lam / lam.sum()
+    dl = lam * np.sqrt(2.0 / n)                     # North sampling error
+    keep = 1
+    for i in range(min(len(lam) - 1, ceiling)):
+        if frac[i] < min_frac_of_mean / len(lam):   # scree: below-average variance
+            break
+        keep = i + 1
+        if (lam[i] - lam[i + 1]) <= dl[i]:          # North: not separated from next
+            break
+    return max(1, min(keep, ceiling))
+
+
+def select_modes_north(gcm, obs, x_ceiling=10, y_ceiling=10, min_frac_of_mean=1.0):
+    """Eigenvalue-spectrum (Scree + North's rule) mode selection.
+
+    Selects the EOF truncations *before any skill measurement*, the way CPT.x's
+    dry-run does: X modes from the (ensemble-mean) predictor hindcast, Y modes
+    from the predictand, CCA modes = min(X, Y). Yields the parsimonious 2-5
+    modes per field that match ACMAD's operational selection, at the cost of one
+    SVD per field (milliseconds).
+
+    Contrast with :func:`select_modes` (cross-validated Kendall's-tau grid
+    search): the tau search is CPT-compatible for skill-rich regimes, but on
+    weak-signal seasonal fields the tau signal is noise and the search
+    over-selects (measured: picked 10/10/10 at tau = -0.057, reproducing the
+    over-fit it was meant to prevent, at ~27 min/member vs <1 s here). Use
+    ``"north"`` for weak-signal seasonal fields, ``"cpt"``/``"auto"`` when CV
+    skill is real.
+
+    Returns ``(x_eof, y_eof, cca)`` fixed mode counts.
+    """
+    x_eof = _north_modes(gcm, x_ceiling, min_frac_of_mean)
+    y_eof = _north_modes(obs, y_ceiling, min_frac_of_mean)
+    return x_eof, y_eof, min(x_eof, y_eof)
 
 
 def select_modes(gcm, obs, years, window, x_eof_range=(1, 10), y_eof_range=(1, 10),
