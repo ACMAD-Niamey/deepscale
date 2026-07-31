@@ -118,6 +118,28 @@ def test_percentile_of_broadcasts_over_the_surviving_dims(record):
     assert frac.sel(lat=1.0).item() == pytest.approx(0.9)
 
 
+def test_percentile_of_gamma_is_monotone_and_bounded(record):
+    # Record 0..9 has one zero year -> p0 = 0.1; positive amounts fit a Gamma.
+    lo = percentile_of(xr.DataArray(1.0), record, method="gamma").isel(lat=0).item()
+    mid = percentile_of(xr.DataArray(4.5), record, method="gamma").isel(lat=0).item()
+    hi = percentile_of(xr.DataArray(20.0), record, method="gamma").isel(lat=0).item()
+    assert 0.0 < lo < mid < hi < 1.0
+
+
+def test_percentile_of_gamma_puts_zero_rain_at_half_the_dry_mass(record):
+    # One of ten years is zero -> p0 = 0.1; a zero value sits at p0/2 = 0.05.
+    frac = percentile_of(xr.DataArray(0.0), record, method="gamma")
+    assert frac.isel(lat=0).item() == pytest.approx(0.05)
+
+
+def test_percentile_of_gamma_needs_two_wet_years():
+    dry = xr.DataArray(
+        np.zeros((5, 1)), dims=("year", "lat"),
+        coords={"year": np.arange(5), "lat": [0.0]})
+    frac = percentile_of(xr.DataArray(1.0), dry, method="gamma")
+    assert np.isnan(frac.isel(lat=0).item())
+
+
 def test_percentile_of_propagates_nan_values_rather_than_calling_them_driest(record):
     """The naive `(clim < nan).mean()` is 0.0, which would map missing data onto
     'driest on record'. It must be NaN."""
