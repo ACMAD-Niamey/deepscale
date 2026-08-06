@@ -7,7 +7,7 @@ from .pev import prediction_error_variance
 from .flex_forecast import flex_forecast, FlexForecastResult
 from .pipelines import seasonal_mme, SeasonalMMEResult
 from .indices import Index
-from .calibrate import calibrate, LogitConfig
+from .calibrate import calibrate, CalibrateResult, LogitConfig
 from .climate import (
     accumulate,
     frequency_below,
@@ -54,6 +54,7 @@ __all__ = [
     "SeasonalMMEResult",
     "Index",
     "calibrate",
+    "CalibrateResult",
     "LogitConfig",
     "accumulate",
     "frequency_below",

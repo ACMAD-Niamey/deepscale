@@ -58,6 +58,7 @@ class LogitConfig:
 def calibrate(predictor=None, obs=None, *, method, forecast=None,
               forecast_year=None, predictor_hindcast=None,
               predictor_forecast=None, combine="mean", output_type="tercile",
+              return_components=False, cv=None, cv_window=1,
               verbose=False, **method_kwargs):
     """Calibrate a predictor to tercile probabilities (no resolution change).
 
@@ -78,22 +79,64 @@ def calibrate(predictor=None, obs=None, *, method, forecast=None,
     output_type : str
         ``"tercile"`` (default) preserves the existing below/normal/above
         probability output for every method. Methods that additionally
-        support deterministic output (``supports_deterministic = True``, e.g.
+        support deterministic output (``supports_deterministic = True``:
+        ``ereg`` — the calibrated rainfall field — and
         ``smoothed_regression``) accept other values; requesting a non-
         "tercile" ``output_type`` from a method that doesn't support it
         raises ``ValueError``.
+    return_components : bool
+        When True (``ereg``/``logit`` only), return a :class:`CalibrateResult`
+        carrying both the combined map and each model's own post-calibration
+        map — so members can be inspected and a subset recombined (e.g. with
+        :func:`deepscale.combine_terciles`) without refitting.
+    cv : {None, "loyo"}
+        ``"loyo"`` (``ereg``/``logit``, tercile output only) returns the
+        leave-year(s)-out CROSS-VALIDATED hindcast instead of the forecast:
+        for every obs year, the model is refit without that year (window
+        ``cv_window``) and the held-out year is predicted. The result gains a
+        leading ``year`` dimension and is ready for :func:`deepscale.skill`.
+        ``forecast``/``forecast_year`` are ignored in this mode. Honest but
+        brute-force: cost is ~n_years × one full calibration — prefer a
+        coarser ``obs`` grid for skill maps.
+    cv_window : int
+        Years left out per fold (1 = strict leave-one-out; 5 matches the
+        PyCPT ``crossvalidation_window`` convention).
 
     Returns
     -------
-    xr.DataArray
+    xr.DataArray or CalibrateResult
         ``(tercile, lat, lon)`` probabilities, ``tercile=[0,1,2]``, summing to 1
         per cell where defined (``output_type="tercile"``), or a method-
-        specific deterministic output otherwise.
+        specific deterministic output otherwise. With ``cv=`` a leading
+        ``year`` dim of held-out predictions; with ``return_components=True``
+        a :class:`CalibrateResult` instead of the bare combined array.
     """
     if predictor is None and predictor_hindcast is not None:
         predictor = predictor_hindcast
     if forecast is None and predictor_forecast is not None:
         forecast = predictor_forecast
+
+    _component_methods = ("ereg", "logit")
+    if (return_components or cv is not None) and not (
+            isinstance(method, str) and method in _component_methods):
+        raise ValueError(
+            "calibrate: return_components/cv are supported for methods "
+            f"{_component_methods}; got method={method!r}."
+        )
+    if cv is not None:
+        if cv != "loyo":
+            raise ValueError(f"calibrate: cv must be None or 'loyo'; got {cv!r}.")
+        if output_type != "tercile":
+            raise ValueError(
+                "calibrate: cv='loyo' currently supports output_type='tercile' only."
+            )
+        return _calibrate_cv(
+            method, predictor, obs, forecast=forecast, combine=combine,
+            cv_window=cv_window, return_components=return_components,
+            verbose=verbose, method_kwargs=method_kwargs,
+        )
+    if return_components:
+        method_kwargs = dict(method_kwargs, return_components=True)
 
     if isinstance(method, LogitConfig):
         if output_type != "tercile":
@@ -116,11 +159,43 @@ def calibrate(predictor=None, obs=None, *, method, forecast=None,
               combine=combine, output_type=output_type, verbose=verbose, **method_kwargs)
 
 
+from dataclasses import dataclass, field as _dc_field
+
+
+@dataclass
+class CalibrateResult:
+    """Outcome of ``calibrate(..., return_components=True)`` (and/or ``cv=``).
+
+    ``combined`` is exactly what the plain call returns (the cross-model
+    combination); ``per_model`` maps each input model name to ITS calibrated
+    field — post-calibration tercile probabilities (or the deterministic field
+    under ``output_type="deterministic"``), so a forecaster can inspect the
+    members, drop models, and recombine a subset with
+    :func:`deepscale.combine_terciles` without refitting anything.
+
+    Under ``cv=`` the same fields hold the cross-validated hindcast instead
+    (a leading ``year`` dimension of held-out predictions), ready for
+    :func:`deepscale.skill`.
+    """
+    combined: "xr.DataArray"
+    per_model: dict = _dc_field(default_factory=dict)
+
+
 def _as_model_dict(predictor):
     """Normalize predictor into a ``{model: value}`` dict."""
     if isinstance(predictor, dict):
         return predictor
     return {"model": predictor}
+
+
+def _combine_deterministic(maps: dict) -> xr.DataArray:
+    """Equal-weight cross-model mean of deterministic (lat, lon[, year]) fields."""
+    items = [m for m in maps.values() if m is not None]
+    if not items:
+        raise ValueError("calibrate: no model produced a deterministic forecast.")
+    out = items[0] if len(items) == 1 else xr.concat(items, dim="model").mean("model")
+    out.attrs.update(n_models=len(items))
+    return out
 
 
 def _combine_models(maps: dict, combine: str) -> xr.DataArray:
@@ -425,7 +500,8 @@ def _native_obs_hindcast_years(hcst, obs, *, name):
 @register_calibrator("ereg")
 def _calibrate_ereg(predictor, obs, *, forecast=None, forecast_year=None,
                     combine="mean", clip_negative=False, threshold_source="obs",
-                    native_years: bool = False, verbose=False, **_):
+                    native_years: bool = False, output_type="tercile",
+                    return_components=False, verbose=False, **_):
     """eReg calibration: per-model OLS(obs ~ ens-mean) → parametric terciles →
     cross-model average. Each model's predictor is ``(hindcast, forecast)`` with
     the GCM already on the obs grid. ``forecast_year`` selects the year; with no
@@ -452,20 +528,97 @@ def _calibrate_ereg(predictor, obs, *, forecast=None, forecast_year=None,
         m.fit(hcst.sel(year=years), obs.sel(year=years))
         fc = _select_forecast_year_slice(
             fcst if fcst is not None else hcst, forecast_year)
-        # native_years=False: years == every obs year (enforced by
-        # _common_obs_hindcast_years), so obs.sel(year=years) == obs; pass
-        # obs unchanged to keep this path byte-for-byte identical to before.
-        # native_years=True: years is this model's own (possibly narrower)
-        # overlap, so the climatology reference must be trimmed to match —
-        # this is what the consumer (calibrate_ereg_native_years) does.
-        obs_climatology = obs.sel(year=years) if native_years else obs
-        maps[name] = m.predict_tercile(
-            fc, obs_climatology, threshold_source=threshold_source)
+        if output_type == "deterministic":
+            # the calibrated deterministic rainfall for this model — the
+            # OLS-corrected ensemble-mean field behind the terciles.
+            det = m.predict(fc)
+            maps[name] = det.squeeze("year", drop=True) if "year" in det.dims else det
+        else:
+            # native_years=False: years == every obs year (enforced by
+            # _common_obs_hindcast_years), so obs.sel(year=years) == obs; pass
+            # obs unchanged to keep this path byte-for-byte identical to before.
+            # native_years=True: years is this model's own (possibly narrower)
+            # overlap, so the climatology reference must be trimmed to match —
+            # this is what the consumer (calibrate_ereg_native_years) does.
+            obs_climatology = obs.sel(year=years) if native_years else obs
+            maps[name] = m.predict_tercile(
+                fc, obs_climatology, threshold_source=threshold_source)
         if verbose:
             print(f"[calibrate:ereg] {name}: calibrated")
-    out = _combine_models(maps, combine)
-    out.attrs.update(method="ereg", forecast_year=int(forecast_year))
+    if output_type == "deterministic":
+        out = _combine_deterministic(maps)
+    else:
+        out = _combine_models(maps, combine)
+    out.attrs.update(method="ereg", forecast_year=int(forecast_year),
+                     output_type=output_type)
+    if return_components:
+        return CalibrateResult(combined=out, per_model=maps)
     return out
+
+
+_calibrate_ereg.supports_deterministic = True
+
+
+def _calibrate_cv(method, predictor, obs, *, forecast=None, combine="mean",
+                  cv_window=1, return_components=False, verbose=False,
+                  method_kwargs=None):
+    """Leave-year(s)-out cross-validated hindcast for the calibrate family.
+
+    For every obs year: refit on the remaining years (window ``cv_window``)
+    and predict the held-out year from that fold's fit — the same fold logic
+    as ``seasonal_mme``'s CCA path, applied to ``ereg``/``logit``. Honest
+    (the held-out year never enters the fit, the tercile thresholds, or the
+    detrend line) but brute-force: cost is ~n_years x one full calibration.
+
+    Models missing a fold's test year are skipped for that fold (their maps
+    are NaN there after the outer-join concat), mirroring ``native_years``.
+    """
+    from .cv import loyo
+
+    method_kwargs = dict(method_kwargs or {})
+    method_kwargs.pop("return_components", None)
+    years = [int(y) for y in obs.year.values]
+
+    if method == "ereg":
+        models = _split_ereg_predictor(predictor, forecast)
+    else:
+        models = {name: series for name, series in _as_model_dict(predictor).items()}
+
+    fold_combined = []
+    fold_per = {name: [] for name in models}
+    for train_years, test_year in loyo(years, window=cv_window):
+        if method == "ereg":
+            avail = {n: (h, None) for n, (h, _f) in models.items()
+                     if test_year in set(h.year.values.tolist())}
+            fc = {n: h.sel(year=[test_year]) for n, (h, _f) in avail.items()}
+        else:
+            avail = {n: s.sel(year=[y for y in s.year.values if int(y) != test_year
+                                    and int(y) in train_years])
+                     for n, s in models.items()
+                     if test_year in set(s.year.values.tolist())}
+            fc = {n: models[n].sel(year=test_year)
+                  for n in avail}
+        if not avail:
+            continue
+        fn = get_calibrator(method)
+        res = fn(avail, obs.sel(year=[y for y in train_years]),
+                 forecast=fc, forecast_year=test_year, combine=combine,
+                 return_components=True, verbose=False, **method_kwargs)
+        fold_combined.append(res.combined.expand_dims(year=[test_year]))
+        for n, m in res.per_model.items():
+            fold_per[n].append(m.expand_dims(year=[test_year]))
+        if verbose:
+            print(f"[calibrate:cv] {test_year}: {len(avail)} model(s)")
+
+    if not fold_combined:
+        raise ValueError("calibrate(cv='loyo'): no fold produced a forecast.")
+    combined = xr.concat(fold_combined, dim="year").sortby("year")
+    combined.attrs.update(cv="loyo", cv_window=int(cv_window), method=method)
+    if not return_components:
+        return combined
+    per_model = {n: xr.concat(parts, dim="year").sortby("year")
+                 for n, parts in fold_per.items() if parts}
+    return CalibrateResult(combined=combined, per_model=per_model)
 
 
 @register_calibrator("logit")
@@ -473,7 +626,8 @@ def _calibrate_logit(predictor, obs, *, forecast=None, forecast_year=None,
                      combine="mean", model="independent_binomial", backend="sklearn",
                      regularization=None, significance_mask=None, min_years=10,
                      tercile_edges: str = "exclusive",
-                     detrend: bool = False, verbose=False, **_):
+                     detrend: bool = False, return_components=False,
+                     verbose=False, **_):
     """Logistic calibration: per-model per-cell logistic of tercile occurrence on
     a scalar index → cross-model average. ``predictor`` is ``{model: index}`` and
     ``forecast`` the matching ``{model: index_value}`` (or single values).
@@ -513,6 +667,8 @@ def _calibrate_logit(predictor, obs, *, forecast=None, forecast_year=None,
             print(f"[calibrate:logit] {name}: fit on index")
     out = _combine_models(maps, combine)
     out.attrs.update(method="logit", model=model, backend=backend)
+    if return_components:
+        return CalibrateResult(combined=out, per_model=maps)
     return out
 
 
