@@ -97,9 +97,13 @@ def _make_tercile_axes(plt, extent, figsize):
 
 def _draw_cartopy_basemap(ax):
     import importlib
-    cfeature = importlib.import_module("cartopy.feature")
+    ccrs = importlib.import_module("cartopy.crs")
     ax.coastlines(resolution="50m", linewidth=0.8, color="#333333")
-    ax.add_feature(cfeature.BORDERS, linewidth=0.6, edgecolor="#555555")
+    # Filtered NE boundary lines instead of cfeature.BORDERS: suppresses lines
+    # internal to a merged territory group (e.g. Somalia-Somaliland), matching
+    # the UN/GHACOF depiction. Everything else is identical to BORDERS.
+    ax.add_geometries(_neutral_border_geoms("50m"), ccrs.PlateCarree(),
+                      facecolor="none", edgecolor="#555555", linewidth=0.6)
     gl = ax.gridlines(draw_labels=True, linewidth=0.3, color="#777777", alpha=0.5)
     gl.top_labels = False
     gl.right_labels = False
@@ -145,6 +149,9 @@ def _draw_geopandas_basemap(ax, extent):
             (_NE_BORDERS, "#555555", 0.6, 4),
         ):
             gdf = gpd.read_file(path)
+            if path is _NE_BORDERS:
+                # Same territory-group suppression as the cartopy path (Somalia).
+                gdf = gdf[~gdf.geometry.apply(_is_internal_border)]
             if use_0_360:
                 gdf = _to_0_360(gdf)
             gdf.cx[lon_w:lon_e, lat_s:lat_n].plot(
@@ -189,6 +196,21 @@ def _tercile_style_legend(ax, style, below_label, above_label):
 
 _COUNTRY_GEOM_CACHE = {}
 
+# Territories that Natural Earth ships as separate admin_0 records but that are
+# rendered as part of another country on UN/WMO-style operational maps (the
+# GHACOF depiction). Requesting the parent in ``clip_to`` includes the members,
+# and the internal boundary between them is suppressed from the drawn borders.
+_TERRITORY_GROUPS = {"Somalia": ("Somaliland",)}
+
+
+def _expand_territories(names):
+    """Add territory-group members whenever their parent country is requested."""
+    expanded = set(names)
+    for parent, members in _TERRITORY_GROUPS.items():
+        if parent in expanded:
+            expanded.update(members)
+    return expanded
+
 
 def _country_geometry(names):
     """Prepared union geometry of Natural Earth admin_0 countries matching `names`."""
@@ -196,6 +218,7 @@ def _country_geometry(names):
     shpreader = importlib.import_module("cartopy.io.shapereader")
     unary_union = importlib.import_module("shapely.ops").unary_union
     prep = importlib.import_module("shapely.prepared").prep
+    names = _expand_territories(names)
     key = tuple(sorted(names))
     if key not in _COUNTRY_GEOM_CACHE:
         rdr = shpreader.Reader(shpreader.natural_earth(
@@ -208,6 +231,59 @@ def _country_geometry(names):
         # buffer in degrees to include coastal border cells
         _COUNTRY_GEOM_CACHE[key] = prep(unary_union(geoms).buffer(0.3))
     return _COUNTRY_GEOM_CACHE[key]
+
+
+_INTERNAL_BORDER_CACHE = {}
+
+
+def _territory_interiors():
+    """Shrunken union geometry per territory group, for internal-border tests.
+
+    The negative buffer pulls the union's edge inward so a boundary line that
+    runs ALONG the group's exterior (e.g. the Ethiopia-Somalia border) does not
+    test as internal, while a line crossing the interior (the Somalia-Somaliland
+    de-facto line) does.
+    """
+    if "interiors" not in _INTERNAL_BORDER_CACHE:
+        import importlib
+        shpreader = importlib.import_module("cartopy.io.shapereader")
+        unary_union = importlib.import_module("shapely.ops").unary_union
+        rdr = shpreader.Reader(shpreader.natural_earth(
+            resolution="10m", category="cultural", name="admin_0_countries"))
+        interiors = []
+        for parent, members in _TERRITORY_GROUPS.items():
+            group = {parent, *members}
+            geoms = [r.geometry for r in rdr.records()
+                     if r.attributes.get("NAME", "") in group]
+            if geoms:
+                interiors.append(unary_union(geoms).buffer(-0.05))
+        _INTERNAL_BORDER_CACHE["interiors"] = interiors
+    return _INTERNAL_BORDER_CACHE["interiors"]
+
+
+def _is_internal_border(geom):
+    """True if a boundary line lies mostly inside a merged territory group."""
+    if geom.length == 0:
+        return False
+    for interior in _territory_interiors():
+        if geom.intersection(interior).length / geom.length > 0.5:
+            return True
+    return False
+
+
+def _neutral_border_geoms(resolution="50m"):
+    """NE admin_0 boundary lines minus those internal to a territory group."""
+    key = ("borders", resolution)
+    if key not in _INTERNAL_BORDER_CACHE:
+        import importlib
+        shpreader = importlib.import_module("cartopy.io.shapereader")
+        rdr = shpreader.Reader(shpreader.natural_earth(
+            resolution=resolution, category="cultural",
+            name="admin_0_boundary_lines_land"))
+        _INTERNAL_BORDER_CACHE[key] = [
+            r.geometry for r in rdr.records()
+            if not _is_internal_border(r.geometry)]
+    return _INTERNAL_BORDER_CACHE[key]
 
 
 def _region_masks(lat, lon, style):
