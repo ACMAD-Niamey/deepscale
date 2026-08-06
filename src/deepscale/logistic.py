@@ -86,10 +86,14 @@ def _fit_one_binomial_sklearn(x, y, x_f, regularization):
     """P(y=1 | x_f) for a single binomial logit, with sklearn."""
     from sklearn.linear_model import LogisticRegression
 
+    # sklearn 1.8 deprecated the `penalty` kwarg (removal in 1.10). Unregularized
+    # is expressed as C=inf (sklearn's own migration guidance); the regularized
+    # branch relies on l2 being the default penalty in every sklearn version.
+    # Both forms are warning-free on old and new sklearn — no version gate.
     if regularization is None:
-        clf = LogisticRegression(penalty=None, max_iter=1000)
+        clf = LogisticRegression(C=np.inf, max_iter=1000)
     else:
-        clf = LogisticRegression(penalty="l2", C=1.0 / regularization, max_iter=1000)
+        clf = LogisticRegression(C=1.0 / regularization, max_iter=1000)
     clf.fit(x[:, None], y)
     return float(clf.predict_proba([[x_f]])[0, 1]), None
 
@@ -156,9 +160,10 @@ def _multinomial_probs(x, labels, x_f, *, backend, regularization, min_years):
 
         # multi_class is left at default: lbfgs on a >2-class problem solves the
         # multinomial logit (the explicit kwarg was deprecated in sklearn 1.5).
+        # `penalty` kwarg deprecated in sklearn 1.8 (see _fit_one_binomial_sklearn).
         kw = dict(max_iter=1000)
-        clf = LogisticRegression(penalty=None, **kw) if regularization is None \
-            else LogisticRegression(penalty="l2", C=1.0 / regularization, **kw)
+        clf = LogisticRegression(C=np.inf, **kw) if regularization is None \
+            else LogisticRegression(C=1.0 / regularization, **kw)
         clf.fit(xo[:, None], yo)
         proba = clf.predict_proba([[x_f]])[0]
         out = np.zeros(3)
