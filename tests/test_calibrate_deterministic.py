@@ -38,11 +38,25 @@ def test_calibrate_deterministic_returns_season_map():
     assert bool(np.isfinite(out).all())
 
 
-def test_calibrate_deterministic_rejected_for_ereg():
+def test_calibrate_deterministic_supported_for_ereg():
+    # ereg gained deterministic output (the calibrated OLS-corrected field
+    # behind the terciles) — contract change, previously rejected.
     fc, ob = _cube()
+    out = deepscale.calibrate({"m": (fc.isel(season=0), fc.isel(season=0, year=[-1]))},
+                              ob.isel(season=0), method="ereg",
+                              output_type="deterministic",
+                              forecast_year=int(ob.year[-1]))
+    assert "tercile" not in out.dims
+    assert np.isfinite(out.values).any()
+
+
+def test_calibrate_deterministic_rejected_for_logit():
+    # logit remains tercile-only: probabilities are its native output.
+    fc, ob = _cube()
+    idx = fc.isel(season=0).mean(["lat", "lon", "member"])
     with pytest.raises(ValueError, match="output_type"):
-        deepscale.calibrate({"m": (fc.isel(season=0), fc.isel(season=0, year=-1))},
-                            ob.isel(season=0), method="ereg", output_type="deterministic")
+        deepscale.calibrate({"m": idx}, ob.isel(season=0), method="logit",
+                            forecast={"m": 0.0}, output_type="deterministic")
 
 
 def test_smoothed_regression_tercile_output_supported():
