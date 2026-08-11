@@ -50,6 +50,31 @@ def test_regrids_onto_reference():
     assert not pooled.isnull().all()
 
 
+def test_regrid_to_tuple_reference():
+    a = _model(0, lat=(-4, 0, 4), lon=(34, 38, 42))
+    b = _model(1, lat=(-3, 0, 3), lon=(35, 38, 41))            # different grid
+    pooled = pool_ensembles([a, b], regrid_to=([-4, 0, 4], [34, 38, 42]))
+    assert list(pooled.lat.values) == [-4, 0, 4]               # both on the tuple grid
+    assert list(pooled.lon.values) == [34, 38, 42]
+    assert pooled.sizes["member"] == 8
+
+
+def test_regrid_to_tuple_leaves_on_grid_arrays_untouched(monkeypatch):
+    """An array already on the tuple reference grid must not be re-interpolated —
+    the value-equality fast path, which a DataArray.equals(<ndarray>) check skipped."""
+    a = _model(0, lat=(-4, 0, 4), lon=(34, 38, 42))
+    calls = {"n": 0}
+    real_interp = xr.DataArray.interp
+
+    def counting_interp(self, *args, **kwargs):
+        calls["n"] += 1
+        return real_interp(self, *args, **kwargs)
+
+    monkeypatch.setattr(xr.DataArray, "interp", counting_interp)
+    pool_ensembles([a], regrid_to=([-4, 0, 4], [34, 38, 42]))
+    assert calls["n"] == 0
+
+
 def test_resolves_latitude_longitude_aliases():
     a = _model(0).rename({"lat": "latitude", "lon": "longitude"})
     b = _model(1).rename({"lat": "latitude", "lon": "longitude"})

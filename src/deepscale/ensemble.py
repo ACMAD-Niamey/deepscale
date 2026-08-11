@@ -425,11 +425,18 @@ def pool_ensembles(arrays, *, member_dim="member", regrid_to="first", align_year
     else:
         ref_lat, ref_lon = regrid_to
 
+    # Compare by coordinate *values*: when regrid_to is a (lat, lon) tuple of raw
+    # arrays, `DataArray.equals(<ndarray>)` is always False, so without this every
+    # array would be needlessly re-interpolated even when already on the grid.
+    ref_lat_v = np.asarray(ref_lat.values if isinstance(ref_lat, xr.DataArray) else ref_lat)
+    ref_lon_v = np.asarray(ref_lon.values if isinstance(ref_lon, xr.DataArray) else ref_lon)
+
     aligned = []
     for a in arrays:
         alat, alon = _resolve_spatial(a, context="pool_ensembles")
-        if not (a[alat].equals(ref_lat) and a[alon].equals(ref_lon)):
-            a = a.interp({alat: ref_lat, alon: ref_lon})
+        if not (np.array_equal(a[alat].values, ref_lat_v)
+                and np.array_equal(a[alon].values, ref_lon_v)):
+            a = a.interp({alat: ref_lat_v, alon: ref_lon_v})
         aligned.append(a)
 
     if align_years:

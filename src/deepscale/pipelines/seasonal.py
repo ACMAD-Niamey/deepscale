@@ -21,6 +21,23 @@ from .._warnings import quiet_all_nan_slices
 _PROBABILISTIC_METHODS = frozenset({"corrdiff"})
 
 
+def _average_leverages(per_model_leverages):
+    """Per-year mean of the per-(track, model) leverages, skipping non-finite values.
+
+    A single degenerate model must not poison the MME leverage estimate: a NaN/Inf
+    would flow into ``pesd = sqrt(s2*(1+lev))`` and collapse the whole tercile
+    forecast. ``cca._project_by_sv`` prevents the finite-but-absurd case at source;
+    this handles the non-finite case defensively. For all-finite inputs — the
+    healthy path — it is identical to a plain mean. Returns one leverage per year,
+    ``nan`` for a year where every model was non-finite.
+    """
+    levs = []
+    for vals in zip(*per_model_leverages.values()):
+        finite = [v for v in vals if np.isfinite(v)]
+        levs.append(sum(finite) / len(finite) if finite else np.nan)
+    return levs
+
+
 @dataclass
 class SeasonalMMEResult:
     """Outcome of `seasonal_mme()`. Field semantics: see the design doc."""
@@ -201,16 +218,7 @@ def seasonal_mme(
                     "were collected; was a non-CCA method used?"
                 )
             # Average leverages across (track, model) per year to get an MME-level estimate.
-            # Skip any non-finite per-model value: a single degenerate model must not poison the
-            # average (a NaN/Inf leverage would flow into pesd = sqrt(s2*(1+lev)) and collapse the
-            # whole tercile forecast). cca._project_by_sv prevents the finite-but-absurd case at
-            # source; this handles the non-finite case defensively. For all-finite inputs — the
-            # healthy path — this is identical to a plain mean.
-            levs = []
-            for vals in zip(*per_model_leverages.values()):
-                finite = [v for v in vals if np.isfinite(v)]
-                levs.append(sum(finite) / len(finite) if finite else np.nan)
-            tercile_kwargs["leverages"] = levs
+            tercile_kwargs["leverages"] = _average_leverages(per_model_leverages)
             tercile_kwargs["n_modes"] = (cpt_args or {}).get("n_modes", 3)
 
         tercile_cv = to_tercile_cv(

@@ -73,15 +73,11 @@ def test_fit_raises_on_zero_variance_predictor():
 
 # ---- seasonal_mme leverage average skips non-finite per-model values -----------------
 
-def test_leverage_average_skips_nonfinite(monkeypatch):
-    # Directly exercise the averaging logic used in pipelines/seasonal.py: a per-year mean that
-    # drops non-finite entries, and is a plain mean when all are finite.
-    def avg(per_model_leverages):
-        levs = []
-        for vals in zip(*per_model_leverages.values()):
-            finite = [v for v in vals if np.isfinite(v)]
-            levs.append(sum(finite) / len(finite) if finite else np.nan)
-        return levs
+def test_leverage_average_skips_nonfinite():
+    # Exercise the real averaging helper from pipelines/seasonal.py (a per-year mean that
+    # drops non-finite entries, and is a plain mean when all are finite) — not a local copy,
+    # so a regression in the shipped code path is actually caught.
+    from deepscale.pipelines.seasonal import _average_leverages as avg
 
     healthy = {"a": [0.1, 0.2, 0.3], "b": [0.3, 0.2, 0.1]}
     assert avg(healthy) == [0.2, 0.2, 0.2]                     # identical to plain mean
