@@ -712,3 +712,33 @@ def test_plot_cca_modes_pair_shares_sign_convention():
     np.testing.assert_allclose(np.asarray(p_mesh), p_signed, equal_nan=True)
     np.testing.assert_allclose(np.asarray(o_mesh), o_signed, equal_nan=True)
     plt.close(fig)
+
+
+def test_somalia_territory_merge_and_border_suppression():
+    """clip_to=['Somalia'] must include Somaliland (UN/GHACOF depiction), and the
+    internal de-facto line must be suppressed from drawn borders while shared
+    exterior borders (Ethiopia-Somalia) survive."""
+    from shapely.geometry import Point, box
+    from deepscale.plotting.forecasts import (
+        _country_geometry, _neutral_border_geoms, _is_internal_border)
+    import cartopy.io.shapereader as shpreader
+
+    # Hargeisa (Somaliland capital) is inside the 'Somalia' clip geometry.
+    assert _country_geometry(["Somalia"]).contains(Point(44.06, 9.56))
+
+    rdr = shpreader.Reader(shpreader.natural_earth(
+        resolution="50m", category="cultural", name="admin_0_boundary_lines_land"))
+    records = list(rdr.records())
+    kept = _neutral_border_geoms("50m")
+    suppressed = [r for r in records if _is_internal_border(r.geometry)]
+    # a small number of internal lines suppressed, incl. the Somaliland split
+    assert 1 <= len(suppressed) <= 3
+    assert len(kept) == len(records) - len(suppressed)
+    horn = box(47.5, 7.5, 49.5, 11.8)
+    assert any(s.geometry.intersects(horn) for s in suppressed), \
+        "the Somalia-Somaliland line must be among the suppressed"
+    # the Ethiopia-Somalia border (FEATURECLA 'Indefinite', south of the split)
+    # must be KEPT: at least one kept line crosses its bbox interior.
+    eth_som = box(43.0, 4.5, 47.5, 7.9)
+    assert any(g.intersects(eth_som) for g in kept), \
+        "Ethiopia-Somalia border must survive the filter"
