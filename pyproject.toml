@@ -1,6 +1,6 @@
 [project]
 name = "accord-deepscale"
-version = "0.1.13"
+version = "0.1.14"
 description = "Modular downscaling, calibration, and ensemble framework for seasonal climate forecasts"
 readme = "README.md"
 requires-python = ">=3.10"
