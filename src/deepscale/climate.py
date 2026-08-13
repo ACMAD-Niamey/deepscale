@@ -44,6 +44,7 @@ def seasonal_stack(
     time_dim: str = "time",
     cadence: str | None = None,
     years=None,
+    tail_days: int = 0,
 ) -> xr.DataArray:
     """Reshape a continuous time series into one season per year.
 
@@ -63,13 +64,18 @@ def seasonal_stack(
         Season start years to extract. Defaults to every year the record could
         cover. Years with no data in the season are dropped; years with partial
         data are kept, padded with NaN.
+    tail_days : int, default 0
+        Extend each season by this many days past its end. The extra steps are
+        stacked like any other, so a caller can evaluate a rolling window that
+        opens inside the season and closes after it. The default adds nothing.
 
     Returns
     -------
     xr.DataArray
         ``(year, step, ...)``, with a ``step`` dim long enough for the longest
-        season in ``years`` (they can differ by a day across leap years) and a
-        ``season_start`` coordinate on ``year``.
+        season in ``years`` (they can differ by a day across leap years),
+        extended further by ``tail_days`` when that reaches past the longest
+        season, and a ``season_start`` coordinate on ``year``.
     """
     if time_dim not in da.dims:
         raise ValueError(f"{time_dim!r} not found on data with dims {tuple(da.dims)}")
@@ -82,26 +88,36 @@ def seasonal_stack(
         years = range(int(stamps.year.min()) - 1, int(stamps.year.max()) + 1)
     years = [int(y) for y in years]
 
-    width = max(len(season_times(season, y, cadence)) for y in years)
+    base_width = max(len(season_times(season, y, cadence)) for y in years)
 
-    slices, kept = [], []
+    per_year = []
     for year in years:
-        steps = season_step(da[time_dim], season, year=year, cadence=cadence)
+        steps = season_step(da[time_dim], season, year=year, cadence=cadence,
+                            tail_days=tail_days)
         inside = steps.values >= 0
         if not inside.any():
             continue
+        per_year.append((year, steps.values[inside], inside))
+
+    if not per_year:
+        raise ValueError(f"no data falls inside season {season!r} for years {years}")
+
+    # With a tail the axis must fit the furthest step actually present, which
+    # varies with how far the record runs. Without one this is base_width, so
+    # the default path is byte-identical to the previous behaviour.
+    width = max([base_width] + [int(s.max()) + 1 for _, s, _ in per_year])
+
+    slices, kept = [], []
+    for year, steps_inside, inside in per_year:
         sub = da.isel({time_dim: inside})
         sub = (
-            sub.assign_coords(step=(time_dim, steps.values[inside]))
+            sub.assign_coords(step=(time_dim, steps_inside))
             .swap_dims({time_dim: "step"})
             .drop_vars(time_dim)
             .reindex(step=np.arange(width))
         )
         slices.append(sub)
         kept.append(year)
-
-    if not slices:
-        raise ValueError(f"no data falls inside season {season!r} for years {years}")
 
     stacked = xr.concat(slices, dim=pd.Index(kept, name="year"))
     return stacked.assign_coords(

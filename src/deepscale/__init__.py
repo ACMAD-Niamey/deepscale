@@ -34,6 +34,7 @@ from . import metrics     # trigger registration
 from .metrics import loo_predict, loo_corr, permutation_test, fdr
 from . import strategies  # trigger registration
 from . import time        # calendar / season-step utilities
+from . import aggregations  # daily-rainfall season timing and dry spells
 from . import training     # train / inference separation (§10.2)
 from .training import train
 

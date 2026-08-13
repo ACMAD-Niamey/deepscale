@@ -255,6 +255,7 @@ def season_step(
     *,
     year: int | None = None,
     cadence: str | None = None,
+    tail_days: int = 0,
 ) -> xr.DataArray:
     """Assign each stamp in ``time`` its 0-based ordinal position in ``season``.
 
@@ -275,6 +276,11 @@ def season_step(
         the new year, where it must be given explicitly.
     cadence : str, optional
         Overrides :func:`infer_cadence`.
+    tail_days : int, default 0
+        Extend the season's end boundary by this many calendar days. Stamps in
+        the tail receive their natural continuing step index instead of -1.
+        Used by rolling-window aggregations that must look past the season end
+        to evaluate a window opened inside it. The default admits nothing extra.
 
     Returns
     -------
@@ -288,6 +294,8 @@ def season_step(
     cadence = cadence or infer_cadence(time)
 
     start, end = season_bounds(season, year)
+    if tail_days:
+        end = end + pd.Timedelta(days=int(tail_days))
 
     if cadence == "daily":
         # Elapsed days from the season start. Exact across leap years, which an
