@@ -213,6 +213,21 @@ def test_season_step_infers_year_from_the_first_stamp():
     np.testing.assert_array_equal(explicit.values, inferred.values)
 
 
+def test_season_step_tail_days_admits_post_season_stamps():
+    """MAM 2015: Mar 1 is step 0, May 31 is step 91, Jun 1 is step 92."""
+    time = xr.DataArray(pd.date_range("2015-05-30", "2015-06-05", freq="D"), dims="time")
+    plain = season_step(time, "MAM", year=2015)
+    tailed = season_step(time, "MAM", year=2015, tail_days=10)
+    assert plain.values.tolist() == [90, 91, -1, -1, -1, -1, -1]
+    assert tailed.values.tolist() == [90, 91, 92, 93, 94, 95, 96]
+
+
+def test_season_step_tail_days_default_is_unchanged():
+    time = xr.DataArray(pd.date_range("2015-05-30", "2015-06-05", freq="D"), dims="time")
+    assert season_step(time, "MAM", year=2015).values.tolist() == \
+        season_step(time, "MAM", year=2015, tail_days=0).values.tolist()
+
+
 # --- season months ---------------------------------------------------------
 
 

@@ -80,6 +80,30 @@ Skill metrics, passed as `metrics=` to `skill()`: `rpss`, `roc`, `roc_area_below
 
 Cross-validation schemes: `loyo` (leave-one-year-out), `lko` (leave-k-out), `blocked`, `expanding`.
 
+## Daily aggregations
+
+Rainy-season timing and dry-spell statistics, for products that need a date rather than a seasonal total. These take continuous daily rainfall rather than the seasonal arrays above, and are module-qualified rather than selected by name:
+
+```python
+from deepscale import aggregations as agg
+
+onset = agg.onset(daily, season="MAM")                       # default criterion
+cessation = agg.cessation(daily, season="MAM", after=onset)
+length = agg.season_length(onset, cessation)
+spells = agg.dry_spell(daily, season="MAM")
+```
+
+| Function | Returns |
+|---|---|
+| `onset` | first day of the rainy season, as days since the season start, with the resolved calendar date |
+| `cessation` | first qualifying dry spell after a given point, usually onset |
+| `season_length` | days from onset to cessation |
+| `dry_spell` | longest dry run in the season, and how many runs reached the qualifying length |
+
+Onset defaults to 20 mm across 3 consecutive days, rejected as a false start if a 7-day dry spell falls within the following 21 days. Every threshold is a keyword argument, so other regional definitions are one call away, and the values used are recorded on the output for provenance.
+
+Timing results carry a three-state `occurred` field distinguishing a season that failed from a cell with no data, which a NaN date alone cannot express. Output dims are `(year, lat, lon)`, the same shape the rest of the library takes for observations. Full detail, including how much daily data each function needs past the season end, is in [skills/deepscale/references/aggregations.md](skills/deepscale/references/aggregations.md).
+
 ## Example workflow
 
 The repository ships a runnable end-to-end demo:

@@ -106,15 +106,18 @@ analogs = (strong & rapid).top(9)      # strong El Niño AND rapid onset
 ### Season aggregation
 
 ```python
-seasonal_stack(da, season, *, time_dim="time", cadence=None, years=None) -> (year, step, …)
+seasonal_stack(da, season, *, time_dim="time", cadence=None, years=None, tail_days=0) -> (year, step, …)
 ```
 Reshape a continuous `(time, …)` series into one season per year, `step` being the ordinal
 position within the season — the layout that makes years comparable (step 3 of 1997 and step 3
 of 2026 are the same point in the season, which their calendar timestamps never are). `season`
 is anything `deepscale.time.season_bounds` accepts (`"JJAS"`, `(10, 2)`, timestamp pair).
-`step` is long enough for the longest season in `years` (they differ by a day across leap years);
-adds a `season_start` coord on `year`. Years with no data in the season drop; partial years are
-kept and NaN-padded. **This is the input `complete` expects for `climatology`.**
+`step` is long enough for the longest season in `years` (they differ by a day across leap years),
+extended further when `tail_days` pushes any year's furthest step past that; adds a `season_start`
+coord on `year`. Years with no data in the season drop; partial years are kept and NaN-padded.
+`tail_days` (default `0`) extends each season past its end so a rolling window opened inside the
+season can be evaluated; the default adds nothing. **This is the input `complete` expects for
+`climatology`.**
 
 ```python
 seasonal_reduce(da, months, *, how="sum", time_dim="time") -> (year, …)
@@ -264,7 +267,7 @@ Reference these **module-qualified** — `time` is imported as a submodule but i
 **Season-step alignment** — the coordinate every cross-year splice in deepscale joins on:
 
 ```python
-season_step(time, season, *, year=None, cadence=None) -> xr.DataArray   # 0-based ordinal in season; -1 outside
+season_step(time, season, *, year=None, cadence=None, tail_days=0) -> xr.DataArray   # 0-based ordinal in season; -1 outside
 season_bounds(season, year) -> (start, end)     # inclusive Timestamps. season = "JJAS" | (10, 2) | (ts, ts)
 season_months(season) -> list[int]              # "JJAS" -> [6,7,8,9]; wraps ("NDJ" -> [11,12,1])
 season_times(season, year, cadence) -> pd.DatetimeIndex   # start stamp of every step, in order
@@ -272,7 +275,9 @@ season_times(season, year, cadence) -> pd.DatetimeIndex   # start stamp of every
 
 `season` codes are month-initial strings resolved by contiguity (`"JJAS"`, `"OND"`), an
 `(start_month, end_month)` int pair (wraparound like `(10, 2)` ends in `year + 1`), or a
-timestamp pair.
+timestamp pair. `season_step`'s `tail_days` (default `0`) extends each season past its end so a
+rolling window opened inside the season can be evaluated; the default adds nothing, and stamps
+inside the tail get their continuing step index instead of `-1`.
 
 **Cadence inference:**
 

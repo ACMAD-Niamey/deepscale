@@ -1,5 +1,6 @@
 """Accumulation and climatological positioning."""
 import numpy as np
+import pandas as pd
 import pytest
 import xarray as xr
 
@@ -8,6 +9,7 @@ from deepscale.climate import (
     frequency_below,
     percentile_of,
     rank_of_record,
+    seasonal_stack,
 )
 
 
@@ -27,6 +29,30 @@ def record():
     values = np.tile(np.arange(10.0)[:, None], (1, 2))
     return xr.DataArray(
         values, dims=("year", "lat"), coords={"year": np.arange(2000, 2010), "lat": [0.0, 1.0]}
+    )
+
+
+# --- seasonal_stack ---------------------------------------------------------
+
+
+def test_seasonal_stack_tail_days_widens_step_axis():
+    time = pd.date_range("2015-01-01", "2015-12-31", freq="D")
+    da = xr.DataArray(np.arange(len(time), dtype=float), dims="time",
+                      coords={"time": time})
+    base = seasonal_stack(da, "MAM", years=[2015])
+    tailed = seasonal_stack(da, "MAM", years=[2015], tail_days=10)
+    assert base.sizes["step"] == 92
+    assert tailed.sizes["step"] == 102
+    assert float(tailed.sel(year=2015, step=92)) == float(da.sel(time="2015-06-01"))
+
+
+def test_seasonal_stack_tail_days_default_matches_previous_behaviour():
+    time = pd.date_range("2015-01-01", "2015-12-31", freq="D")
+    da = xr.DataArray(np.arange(len(time), dtype=float), dims="time",
+                      coords={"time": time})
+    xr.testing.assert_identical(
+        seasonal_stack(da, "MAM", years=[2015]),
+        seasonal_stack(da, "MAM", years=[2015], tail_days=0),
     )
 
 

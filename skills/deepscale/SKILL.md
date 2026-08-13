@@ -101,8 +101,9 @@ ds.plot_accumulation_scenarios(result, climatology=clim)
 - **Teleconnection indices** (`ds.Index`) now cover `wvg`, `wvg2`, `nino12/3/34/4`, `oni`, `roni`, `dmi` (`iod`), `wtio`, `setio`, `wio`, `wpac`, with configurable `transform=` (`"standardize"`/`"anomaly"`/`"raw"`), `weights=` (`"cos_lat"`), and `baseline=` — see [references/api.md](references/api.md).
 - **Combine & mask** (`ds.combine_terciles`, `ds.mask_by_skill`, `ds.dry_mask`) and **pool** (`ds.pool_ensembles`) — see [references/methods.md](references/methods.md).
 - **Predictor significance** (`ds.loo_corr`, `ds.permutation_test`, `ds.fdr`) — see [references/metrics-and-terciles.md](references/metrics-and-terciles.md).
+- **Daily aggregations** (`deepscale.aggregations.onset / cessation / season_length / dry_spell`) → rainy-season timing from daily rainfall. Returns `(year, lat, lon)` fields usable as a predictand on the tercile and skill paths, but handle the failed-season years first: `to_tercile_cv` reads NaN as missing data, and a NaN `step` can also mean the season never started, which is a fourth outcome rather than a low tail. `occurred` (1.0 found / 0.0 failed / NaN no data) is the field that tells them apart: see [references/aggregations.md](references/aggregations.md).
 
-Calendar helpers (`deepscale.time.season_step`, `season_bounds`, dekad/pentad arithmetic) are module-qualified — reference them as `deepscale.time.<fn>`, not `ds.<fn>`.
+Calendar helpers (`deepscale.time.season_step`, `season_bounds`, dekad/pentad arithmetic) and daily aggregations (`deepscale.aggregations.onset`, `cessation`, `season_length`, `dry_spell`) are module-qualified: reference them as `deepscale.time.<fn>` / `deepscale.aggregations.<fn>`, not `ds.<fn>`.
 
 ## Critical discipline rules
 
@@ -151,6 +152,7 @@ obs = rosetta.fetch("obs/era5", "precip", region=[-5, 15, 33, 48],
 
 - [references/api.md](references/api.md) — full signatures for the core forecasting verbs/dataclasses and the generalized `Index`
 - [references/analog-completion.md](references/analog-completion.md) — SMPG subsystem: analog selection, scenario completion, climate positioning, scalar-series calibration, calendar/season-step utilities
+- [references/aggregations.md](references/aggregations.md): rainy-season onset/cessation/season length and dry-spell statistics from daily rainfall
 - [references/methods.md](references/methods.md) — downscale methods, calibrators, ensemble strategies (+ `pool_ensembles`), tercile combination/masking (`combine`), CV schemes, registries
 - [references/metrics-and-terciles.md](references/metrics-and-terciles.md) — every metric's semantics + tercile conversion discipline + predictor-significance tools
 - [references/plotting-reporting.md](references/plotting-reporting.md) — which plot for which artifact, forecast/skill maps, field maps & choropleths, scenario/index plots, SVSLRF PDFs, GeoTIFF/NetCDF export, headless figure handling
