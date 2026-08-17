@@ -92,3 +92,70 @@ def test_rejects_bad_weights():
         deepscale.combine_terciles([a, a], weights=[1])          # wrong length
     with pytest.raises(ValueError):
         deepscale.combine_terciles([a, a], weights=[0, 0])       # all zero
+
+
+# --- missing="climatology": absent components vote the flat simplex ------------------
+# The two live operational conventions for an absent component. `drop` (default) is
+# ACMAD's/ICPAC's per-cell nanmean; `climatology` mirrors PyCPT NextGen, whose
+# `construct_mme_new` fills missing members with [33, 34, 33] before `.mean('model')`.
+
+def test_climatology_fill_keeps_full_divisor():
+    a = _probs(LAT, LON, (0.6, 0.3, 0.1))
+    b = _probs(LAT, LON, (0.2, 0.3, 0.5))
+    b.loc[dict(lat=0.0, lon=10.0)] = np.nan
+    out = deepscale.combine_terciles([a, b], missing="climatology")
+    # b abstaining would give 0.6; voting climatology gives (0.6 + 1/3) / 2.
+    np.testing.assert_allclose(out.sel(tercile=0, lat=0.0, lon=10.0).values,
+                               (0.6 + 1 / 3) / 2)
+    # cells where both are present are unaffected.
+    np.testing.assert_allclose(out.sel(tercile=0, lat=2.0, lon=12.0).values, 0.4)
+    np.testing.assert_allclose(out.sum("tercile").values, 1.0)
+
+
+def test_climatology_fill_pulls_toward_flat_not_away():
+    """A masked component should damp the tilt, never blank or amplify it."""
+    a = _probs(LAT, LON, (0.7, 0.2, 0.1))
+    b = _probs(LAT, LON, (0.7, 0.2, 0.1))
+    b.loc[dict(lat=0.0, lon=10.0)] = np.nan
+    cell = dict(tercile=0, lat=0.0, lon=10.0)
+    dropped = deepscale.combine_terciles([a, b])
+    filled = deepscale.combine_terciles([a, b], missing="climatology")
+    assert float(dropped.sel(**cell)) == pytest.approx(0.7)          # abstain: full tilt
+    assert 1 / 3 < float(filled.sel(**cell)) < 0.7                   # vote: damped tilt
+
+
+def test_all_components_absent_stays_nan_under_both():
+    a = _probs(LAT, LON, (0.6, 0.3, 0.1))
+    b = _probs(LAT, LON, (0.2, 0.3, 0.5))
+    for da in (a, b):
+        da.loc[dict(lat=0.0, lon=10.0)] = np.nan
+    cell = dict(tercile=0, lat=0.0, lon=10.0)
+    for mode in ("drop", "climatology"):
+        out = deepscale.combine_terciles([a, b], missing=mode)
+        assert np.isnan(out.sel(**cell).values), f"{mode} invented a forecast"
+
+
+def test_climatology_fill_respects_weights():
+    a = _probs(LAT, LON, (0.8, 0.1, 0.1))
+    b = _probs(LAT, LON, (0.2, 0.4, 0.4))
+    b.loc[dict(lat=0.0, lon=10.0)] = np.nan
+    out = deepscale.combine_terciles([a, b], weights=[3, 1], missing="climatology")
+    np.testing.assert_allclose(out.sel(tercile=0, lat=0.0, lon=10.0).values,
+                               0.75 * 0.8 + 0.25 * (1 / 3))
+
+
+def test_partially_nan_component_is_treated_as_absent():
+    """One NaN category must not yield a mixed 2-/3-category average."""
+    a = _probs(LAT, LON, (0.6, 0.3, 0.1))
+    b = _probs(LAT, LON, (0.2, 0.3, 0.5))
+    b.loc[dict(tercile=2, lat=0.0, lon=10.0)] = np.nan     # only the 'above' category
+    cell = dict(lat=0.0, lon=10.0)
+    out = deepscale.combine_terciles([a, b])
+    np.testing.assert_allclose(out.sel(tercile=0, **cell).values, 0.6)   # b fully ignored
+    np.testing.assert_allclose(out.sel(**cell).sum("tercile").values, 1.0)
+
+
+def test_rejects_bad_missing_mode():
+    a = _probs(LAT, LON, (0.5, 0.3, 0.2))
+    with pytest.raises(ValueError):
+        deepscale.combine_terciles([a, a], missing="climatological")
