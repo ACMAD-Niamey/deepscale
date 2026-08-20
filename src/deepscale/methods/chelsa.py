@@ -230,7 +230,7 @@ def chelsa_precipitation(
     result.name = "precip"
     result.attrs.update(coarse_precip.attrs)
     result.attrs["downscaling"] = "CHELSA orographic redistribution"
-    result.attrs["chelsa_variant"] = "paper-defined Karger 2021/2023"
+    result.attrs["chelsa_variant"] = "CHELSA V2 Karger 2021/2023"
     return result
 
 
@@ -255,7 +255,7 @@ def _training_climatology(field: xr.DataArray, years: xr.DataArray) -> xr.DataAr
 
 @register_method("chelsa")
 class CHELSAMethod(MethodBase):
-    """Paper-defined CHELSA precipitation redistribution.
+    """CHELSA V2 precipitation redistribution.
 
     Training stores fine terrain/static exposure and training-period
     climatologies of wind and PBL inputs.  Prediction may instead receive a

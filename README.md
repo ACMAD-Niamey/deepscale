@@ -64,7 +64,7 @@ Downscaling and bias-correction methods, passed as `method=` to `downscale()` an
 | `delta` | Delta-change |
 | `climatology` | Climatological baseline |
 | `rank-analog` | Rank-based quantile matching |
-| `chelsa` | Paper-defined CHELSA V2 orographic precipitation redistribution; requires fine terrain plus training-period wind, with optional PBL/orography/exposure inputs |
+| `chelsa` | CHELSA V2 orographic precipitation redistribution; requires fine terrain plus training-period wind, with optional PBL/orography/exposure inputs |
 | `corrdiff` | NVIDIA CorrDiff diffusion downscaling; needs GPU dependencies that are not on PyPI (see `src/deepscale/methods/corrdiff.py`) |
 
 Calibration methods, passed as `method=` to `calibrate()`:

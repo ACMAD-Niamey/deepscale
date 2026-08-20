@@ -63,7 +63,7 @@ Therefore there are two separately named reproduction targets:
   apparent overwrite if an upstream run confirms it.
 
 DeepScale implements the `paper` target and records
-`chelsa_variant="paper-defined Karger 2021/2023"` in its output metadata. The
+`chelsa_variant="CHELSA V2 Karger 2021/2023"` in its output metadata. The
 archived-code discrepancy is documented rather than silently reproduced.
 
 ## Existing evidence

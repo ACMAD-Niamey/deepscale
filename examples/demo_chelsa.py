@@ -1,7 +1,7 @@
 """Real-data CHELSA V2 precipitation downscaling over Rwanda.
 
 The demo compares bilinear interpolation, the required DEM+wind CHELSA path,
-and the full paper-defined path with PBL, coarse orography, and the official
+and the full CHELSA V2 path with PBL, coarse orography, and the official
 CHELSA exposure correction. It writes a PNG comparison and a NetCDF bundle.
 
 Run from the repository root:
@@ -233,7 +233,7 @@ def render_plot(fields: dict[str, xr.DataArray]) -> None:
         ax.set_xlabel("longitude")
         ax.set_ylabel("latitude")
         fig.colorbar(image, ax=ax, shrink=0.8)
-    fig.suptitle("Paper-defined CHELSA V2 precipitation downscaling — Rwanda MAM")
+    fig.suptitle("CHELSA V2 precipitation downscaling — Rwanda MAM")
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     fig.savefig(PLOT_PATH, dpi=150)
     plt.close(fig)
