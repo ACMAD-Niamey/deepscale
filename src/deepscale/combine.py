@@ -68,7 +68,8 @@ def _target_grid(regrid_to, first):
     return np.asarray(lat), np.asarray(lon)
 
 
-def combine_terciles(components, weights=None, *, regrid_to=None, renormalize=True):
+def combine_terciles(components, weights=None, *, regrid_to=None, renormalize=True,
+                     missing="drop"):
     """Weighted (default equal) combination of tercile-probability forecasts.
 
     Parameters
@@ -88,6 +89,23 @@ def combine_terciles(components, weights=None, *, regrid_to=None, renormalize=Tr
     renormalize : bool, default True
         Divide the combined probabilities by their tercile sum so every valid
         cell is a proper 3-way simplex.
+    missing : {"drop", "climatology"}, default "drop"
+        What an absent component contributes at a cell where at least one other
+        component is present. The two live operational conventions:
+
+        * ``"drop"`` — it abstains. Weights are renormalised over the components
+          actually present, so two of three surviving means ½/½ rather than ⅓/⅓.
+          This is ACMAD's and ICPAC's per-cell ``nanmean`` behaviour.
+        * ``"climatology"`` — it votes the flat simplex (⅓, ⅓, ⅓) and the divisor
+          stays at the full component count, so an absent component pulls the
+          result *toward* climatology instead of vanishing. This is what IRI's
+          PyCPT NextGen does: ``construct_mme_new`` fills missing members with
+          ``[33, 34, 33]`` *before* ``.mean('model')``.
+
+        Cells where **every** component is absent stay NaN under both settings.
+        (PyCPT would return flat climatology there too, but its arrays are already
+        clipped to the CPT output domain; keeping NaN avoids inventing a forecast
+        over ocean or outside the predictand's footprint.)
 
     Returns
     -------
@@ -96,10 +114,13 @@ def combine_terciles(components, weights=None, *, regrid_to=None, renormalize=Tr
 
     Notes
     -----
-    The average is taken skipping NaN components per cell, so a cell present in
-    only some components still combines from those (weights renormalised over the
-    present components) — matching ACMAD's per-cell ``nanmean`` behaviour.
+    A component is counted present at a cell only if all three tercile categories
+    are finite there; a partially-NaN component is treated as absent, so the result
+    is always a proper simplex rather than a mix of a 2-category and 3-category
+    average.
     """
+    if missing not in ("drop", "climatology"):
+        raise ValueError(f"missing must be 'drop' or 'climatology', got {missing!r}")
     names, das = _as_named_list(components)
     das = [_canonical_latlon(d, context="combine_terciles component") for d in das]
 
@@ -126,10 +147,21 @@ def combine_terciles(components, weights=None, *, regrid_to=None, renormalize=Tr
     stacked = xr.concat(aligned, dim=xr.IndexVariable("component", names))
     wda = xr.DataArray(w, dims="component", coords={"component": names})
 
-    # Per-cell weighted mean skipping NaN components: sum(w*p)/sum(w present).
-    present = stacked.notnull()
+    # A component counts as present at a cell only if all three categories are finite;
+    # blank it wholesale otherwise, so numerator and denominator agree about who voted.
+    comp_present = stacked.notnull().all("tercile")
+    stacked = stacked.where(comp_present)
+    if missing == "climatology":
+        # Absent components vote the flat simplex, so the divisor stays at the full
+        # component count (PyCPT NextGen's fillna-before-mean). Cells where nothing is
+        # present stay NaN rather than becoming a forecast nobody made.
+        stacked = stacked.where(comp_present, 1.0 / len(_TERCILE))
+        stacked = stacked.where(comp_present.any("component"))
+        comp_present = stacked.notnull().all("tercile")
+
+    # Per-cell weighted mean over the present components: sum(w*p)/sum(w present).
     wsum = (stacked * wda).sum("component", skipna=True)
-    wtot = (wda * present).sum("component")
+    wtot = (wda * comp_present).sum("component")
     combined = wsum / wtot.where(wtot > 0)
 
     combined = combined.transpose("tercile", "lat", "lon").assign_coords(tercile=_TERCILE)
