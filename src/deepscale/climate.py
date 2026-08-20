@@ -28,6 +28,7 @@ from .time import infer_cadence, season_step, season_times
 __all__ = [
     "accumulate",
     "frequency_below",
+    "percent_of_normal",
     "percentile_of",
     "rank_of_record",
     "seasonal_reduce",
@@ -313,6 +314,42 @@ def percentile_of(
     # `(clim < values)` is False wherever `values` is NaN, so the comparison
     # silently reports percentile 0 for missing data. Restore the NaN.
     return frac.where(values.notnull())
+
+
+def percent_of_normal(
+    value: xr.DataArray,
+    reference: xr.DataArray,
+    *,
+    dry_threshold: float | None = None,
+) -> xr.DataArray:
+    """``value`` as a percentage of a reference climatology: ``100 × value / clim``.
+
+    100 means exactly normal, 50 half of normal, 200 double. The standard
+    presentation measure implemented with pure xarray arithmetic — scalars,
+    station series, and grids all work.
+
+    Parameters
+    ----------
+    value : xr.DataArray
+        The amount to position (any dims; broadcasts against the climatology).
+    reference : xr.DataArray
+        Either a ``(year, ...)`` record — reduced with ``.mean("year")`` — or
+        an already-reduced climatology without a ``year`` dim.
+    dry_threshold : float, optional
+        Cells whose climatology is not finite or ≤ this threshold (default:
+        ≤ 0 when ``None``) return NaN — percent-of-normal is meaningless on
+        dry ground.
+
+    Notes
+    -----
+    NaN in ``value`` propagates.
+    """
+    climatology = reference
+    if "year" in getattr(reference, "dims", ()):
+        climatology = reference.mean("year")
+    threshold = 0.0 if dry_threshold is None else dry_threshold
+    valid = np.isfinite(climatology) & (climatology > threshold)
+    return 100.0 * value / xr.where(valid, climatology, np.nan)
 
 
 def frequency_below(

@@ -10,7 +10,7 @@ admin-unit `(…, region)` aggregation, or on a single station series `(…,)`.
 | Module | Top-level exports | Role |
 |---|---|---|
 | `deepscale.analog` | `AnalogSet`, `analogs_from_years`, `analogs_from_index`, `analogs_from_field`, `analogs_where` | *Which* past years are analogs |
-| `deepscale.climate` | `seasonal_stack`, `seasonal_reduce`, `accumulate`, `percentile_of`, `frequency_below`, `rank_of_record` | Season aggregation + positioning a value in a record |
+| `deepscale.climate` | `seasonal_stack`, `seasonal_reduce`, `accumulate`, `percentile_of`, `percent_of_normal`, `frequency_below`, `rank_of_record` | Season aggregation + positioning a value in a record |
 | `deepscale.completion` | `complete`, `CompletionResult` | Splice observed + forecast + analog remainders into scenarios |
 | `deepscale.series` | `quantile_map`, `error_bounds`, `ErrorBounds` | Bias-correct / bracket a scalar forecast *series* |
 | `deepscale.time` | (module-qualified only — see below) | Season-step alignment + dekad/pentad calendar arithmetic |
@@ -148,6 +148,14 @@ Where `values` (must **not** carry `dim`) falls in `climatology`'s distribution 
 `method` ∈ `"empirical"` (mid-rank: fraction strictly below + half the tied fraction; bounded,
 assumption-free), `"weibull"` (`rank/(n+1)` plotting position — never exactly 0 or 1),
 `"gaussian"` (fits a normal and evaluates its CDF — extrapolates but assumes symmetry).
+
+```python
+percent_of_normal(value, reference, *, dry_threshold=None) -> percent
+```
+`100 × value / climatology`. `reference` is either a `(year, …)` record (reduced with
+`.mean("year")`) or an already-reduced climatology. Cells whose climatology is not finite or ≤
+`dry_threshold` (default ≤ 0) return NaN — percent-of-normal is meaningless on dry ground. Pure
+xarray arithmetic: scalars, station series, and grids all work.
 
 ```python
 frequency_below(sample, climatology, *, q=1/3, dim="year") -> [0,1]
