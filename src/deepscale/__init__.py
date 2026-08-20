@@ -11,6 +11,7 @@ from .calibrate import calibrate, CalibrateResult, LogitConfig
 from .climate import (
     accumulate,
     frequency_below,
+    percent_of_normal,
     percentile_of,
     rank_of_record,
     seasonal_reduce,
@@ -23,6 +24,7 @@ from .completion import complete, CompletionResult
 from .series import quantile_map, error_bounds, ErrorBounds
 from .methods.smoothed_regression import seasonal_coefficients
 from .io import write_terciles, tercile_mae
+from .terrain import load_terrain
 from .combine import combine_terciles, mask_by_skill, dry_mask
 from .plotting.forecasts import plot_tercile_forecast as plot_terciles
 from .plotting.scenarios import plot_accumulation_scenarios, plot_index_scatter
@@ -59,6 +61,7 @@ __all__ = [
     "LogitConfig",
     "accumulate",
     "frequency_below",
+    "percent_of_normal",
     "percentile_of",
     "rank_of_record",
     "seasonal_reduce",
@@ -76,6 +79,7 @@ __all__ = [
     "seasonal_coefficients",
     "write_terciles",
     "tercile_mae",
+    "load_terrain",
     "combine_terciles",
     "mask_by_skill",
     "dry_mask",

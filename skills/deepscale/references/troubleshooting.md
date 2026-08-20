@@ -24,6 +24,9 @@
 | `ValueError`: unknown safeguard key | `safeguards` accepts only `nested_cv`, `shrinkage`, `min_effective_n`, `gate` |
 | `ImportError` naming `accord-deepscale[plotting]` | Install the plotting extra for maps/PDF/GeoTIFF |
 | `NotImplementedError` from CorrDiff `save`/`load` | Torch model isn't picklable — re-instantiate instead of checkpointing |
+| `TypeError`: CHELSA fit requires terrain/wind | `method="chelsa"` needs `terrain=`, `u_wind=`, and `v_wind=`; `terrain` is a fine-grid elevation array or Dataset with `elevation` |
+| `ValueError`: CHELSA PBL correction needs both inputs | Supply both `boundary_layer_height=` and `coarse_orography=`, or omit both |
+| `ValueError`: CHELSA forecast atmosphere must be 2-D | Select and aggregate the issued forecast wind/PBL period before passing `forecast_atmosphere=`; year/time-bearing fields are rejected to prevent held-year leakage |
 | `NotImplementedError` from `flex_forecast(distribution="gamma")` | V1 is Gaussian-only |
 | `NotImplementedError`: `transform_predictand="Gamma"` | CCA supports `None` or `"Empirical"` |
 | `ValueError` from `prediction_error_variance` | `cv_predictions` and `obs` must cover the same set of years |

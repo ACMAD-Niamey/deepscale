@@ -13,7 +13,14 @@ Everything here is selected by name string via registries (`deepscale/registry.p
 | `delta` | `DeltaScalingMethod` | — | `obs_clim + interp(forecast − gcm_hist_clim)`. Sanity-check baseline |
 | `climatology` | `ClimatologyMethod` | — | No-skill reference: obs climatology tiled across members |
 | `rank-analog` | `RankAnalogMethod` | `closing_size=50`, `gaussian_sigma=1.5`, `upscale_factor=None` | Rank within hindcast climatology → nearest-neighbor upscale → grey-closing + Gaussian smoothing → index into sorted obs climatology |
+| `chelsa` | `CHELSAMethod` | fit kwargs: `terrain`, `u_wind`, `v_wind`; optional `boundary_layer_height`, `coarse_orography`, `exposure`, `pbl_offset_m=500`, `height_scale_m=9000`, `max_distance_km=300`; predict kwarg: `forecast_atmosphere` | CHELSA V2 precipitation redistribution (Karger et al. 2021/2023): SAGA-style wind effect, published PBL correction, optional exposure, and exact parent-cell conservation. DeepScale follows published `p_I = E * H_B`, not the archived driver's apparent PBL overwrite. |
 | `corrdiff` | `CorrDiffMethod` | `device="cuda"`, `n_samples=10`, `target_variable="t2m"` | NVIDIA CorrDiff diffusion downscaler (CMIP6→ERA5), `is_pretrained=True`. Needs GPU deps installed manually (`torch`, `earth2studio`, `nvidia-physicsnemo` — not on PyPI); registered only if imports succeed. Input via `corrdiff_input=(tensor, coords)` from `prepare_corrdiff_input(dataset, target_time, model)`; `save`/`load` raise NotImplementedError |
+
+### CHELSA auxiliary-input and CV contract
+
+`terrain` is a fine-grid elevation DataArray or Dataset containing `elevation`. `u_wind`/`v_wind` may carry `year` and other non-spatial training axes; `fit()` intersects `year` with the hindcast training fold and averages all non-spatial axes. PBL correction is all-or-nothing: pass both `boundary_layer_height` and `coarse_orography`, or neither. `exposure` is the paper's static high-elevation exposition correction.
+
+By default `predict()` uses the fitted training-period atmospheric climatology. For an operational target, `forecast_atmosphere=` accepts a 2-D Dataset containing `u_wind`, `v_wind`, and optionally both PBL fields. Year/time-bearing fields are rejected as a leakage guard. Apply CHELSA month by month before seasonal aggregation when monthly atmospheric fields are available.
 
 ### CCA / CPT parity
 

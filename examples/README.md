@@ -44,6 +44,7 @@ CorrDiff demo needs an NVIDIA GPU.
 | `uv run python examples/demo_seasonal_mme_multimodel.py` | Multi-model MME with per-member contributions | CDS |
 | `uv run python examples/demo_realdata_comparison.py` | Compare downscaling methods on real CHIRPS + C3S | CDS |
 | `uv run python examples/demo_realdata_skill.py` | Leave-one-year-out RPSS skill of each method | CDS |
+| `uv run python examples/demo_chelsa.py` | CHELSA V2 over Rwanda: real C3S/CHIRPS, GLO-90 terrain, ERA5 wind/PBL, official exposure, conservation checks, PNG + NetCDF | CDS + CHELSA/GLO-90 HTTP |
 | `uv run python examples/seasonal_forecast_eastafrica_mam.py --phase 0 1 2` | The full PyCPT-parity reference forecast | CDS |
 | `uv run python examples/demo_corrdiff.py` | NVIDIA CorrDiff diffusion downscaling | GPU |
 

@@ -28,6 +28,8 @@ dependencies = [
     "matplotlib>=3.7",
     "cartopy>=0.22",
     "rioxarray",
+    # deepscale.load_terrain downloads GLO-90 DEM tiles with plain HTTP.
+    "requests",
 ]
 
 [project.urls]

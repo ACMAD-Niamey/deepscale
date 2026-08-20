@@ -1,8 +1,8 @@
 # DeepScale API reference
 
-Import name: `deepscale` (distribution: `accord-deepscale`). `__all__`: `downscale, train, optimize, ensemble, pool_ensembles, skill, SkillReport, skill_compare, ComparisonReport, prediction_error_variance, flex_forecast, FlexForecastResult, seasonal_mme, SeasonalMMEResult, Index, calibrate, LogitConfig, accumulate, frequency_below, percentile_of, rank_of_record, seasonal_reduce, seasonal_stack, AnalogSet, analogs_from_years, analogs_from_index, analogs_from_field, analogs_where, complete, CompletionResult, quantile_map, error_bounds, ErrorBounds, seasonal_coefficients, write_terciles, tercile_mae, combine_terciles, mask_by_skill, dry_mask, loo_predict, loo_corr, permutation_test, fdr, plot_terciles, plot_accumulation_scenarios, plot_index_scatter, plot_field_map, plot_choropleth, natural_earth_borders, TercileStyle, plot_field, render_styled_terciles, plot_tercile_comparison`. Importing the package registers all methods/metrics/strategies.
+Import name: `deepscale` (distribution: `accord-deepscale`). `__all__`: `downscale, train, optimize, ensemble, pool_ensembles, skill, SkillReport, skill_compare, ComparisonReport, prediction_error_variance, flex_forecast, FlexForecastResult, seasonal_mme, SeasonalMMEResult, Index, calibrate, LogitConfig, accumulate, frequency_below, percent_of_normal, percentile_of, rank_of_record, seasonal_reduce, seasonal_stack, AnalogSet, analogs_from_years, analogs_from_index, analogs_from_field, analogs_where, complete, CompletionResult, quantile_map, error_bounds, ErrorBounds, seasonal_coefficients, write_terciles, tercile_mae, load_terrain, combine_terciles, mask_by_skill, dry_mask, loo_predict, loo_corr, permutation_test, fdr, plot_terciles, plot_accumulation_scenarios, plot_index_scatter, plot_field_map, plot_choropleth, natural_earth_borders, TercileStyle, plot_field, render_styled_terciles, plot_tercile_comparison`. Importing the package registers all methods/metrics/strategies.
 
-The analog-selection / scenario-completion / climate-positioning verbs (`AnalogSet`, `analogs_*`, `complete`/`CompletionResult`, `seasonal_stack`, `seasonal_reduce`, `accumulate`, `percentile_of`, `frequency_below`, `rank_of_record`, `quantile_map`, `error_bounds`) form the SMPG subsystem — full signatures and semantics live in [analog-completion.md](analog-completion.md). `combine_terciles`/`mask_by_skill`/`dry_mask` and `pool_ensembles` are documented in [methods.md](methods.md); the significance metrics (`loo_predict`, `loo_corr`, `permutation_test`, `fdr`) in [metrics-and-terciles.md](metrics-and-terciles.md); all plotting in [plotting-reporting.md](plotting-reporting.md). This file covers the core forecasting verbs and the generalized `Index` below.
+The analog-selection / scenario-completion / climate-positioning verbs (`AnalogSet`, `analogs_*`, `complete`/`CompletionResult`, `seasonal_stack`, `seasonal_reduce`, `accumulate`, `percentile_of`, `percent_of_normal`, `frequency_below`, `rank_of_record`, `quantile_map`, `error_bounds`) form the SMPG subsystem — full signatures and semantics live in [analog-completion.md](analog-completion.md). `combine_terciles`/`mask_by_skill`/`dry_mask` and `pool_ensembles` are documented in [methods.md](methods.md); the significance metrics (`loo_predict`, `loo_corr`, `permutation_test`, `fdr`) in [metrics-and-terciles.md](metrics-and-terciles.md); all plotting in [plotting-reporting.md](plotting-reporting.md). This file covers the core forecasting verbs and the generalized `Index` below.
 
 ## `downscale()`
 
@@ -14,7 +14,7 @@ def downscale(predictor_hindcast=None, obs=None, method="bcsd",
 - `method`: registered method name (see `references/methods.md`).
 - `output_type`: `"continuous"` (default) or `"tercile"` (requires `obs` for boundaries).
 - `weights_path`: load a checkpoint and run inference only (skips fitting).
-- Recognized method-constructor kwargs: `n_modes, x_eof_modes, y_eof_modes, cca_modes, device, n_samples, target_variable, variant`. Other kwargs: `verbose=True`, `forecast=` (explicit forecast field).
+- Recognized method-constructor kwargs: `n_modes, x_eof_modes, y_eof_modes, cca_modes, device, n_samples, target_variable, variant`. Other kwargs: `verbose=True`, `forecast=` (explicit forecast field). Remaining kwargs are forwarded to the method's `fit()`/`predict()`.
 - Auto-split: if `predictor_hindcast` has a `year` dim and no explicit `forecast`, fits on `year[:-1]` and predicts the last year (needs ≥2 years).
 - `gcm=` is a deprecated alias for `predictor_hindcast=` (DeprecationWarning; both → `TypeError`).
 - `requires_training=True` methods raise `RuntimeError` directing you to `train()` + `weights_path=`.
@@ -233,6 +233,14 @@ def seasonal_coefficients(predictor_hindcast, obs, temporal_sigma=None) -> xr.Da
 ```
 
 Per-gridpoint ensemble-mean regression slope `a = Cov(Fbar, O)/Var(Fbar)` as a function of the seasonal cycle. Inputs `(season, year, member, lat, lon)` / `(season, year, lat, lon)` on the same grid → coefficient `(season, lat, lon)`. `temporal_sigma`: `None` (per-season, unsmoothed), a float (cyclic Gaussian smoothing across the season axis), or `"constant"` (a single pooled time-invariant slope — a pooled regression over all seasons, not the large-sigma limit). The probabilistic companion functions live in `deepscale.methods.smoothed_regression` — see `references/methods.md`.
+
+## `load_terrain()`
+
+```python
+def load_terrain(like, cache_dir=None) -> xr.Dataset   # elevation, roughness on like's (lat, lon)
+```
+
+Builds reusable terrain covariates on a target grid. `like` is any DataArray/Dataset carrying 1-D `lat`/`lon`; the fetch region comes from the grid's cell edges. Downloads full-resolution (~90 m) Copernicus DEM GLO-90 tiles in parallel to temporary files (ESA/Airbus, public AWS bucket `s3://copernicus-dem-90m`, no credentials; ocean tiles 404 and are skipped; only the aggregate NetCDF is persisted), **block-averages** to cell means (`elevation`, m — a sampled point would be one hillside, not the cell) and keeps the sub-grid std (`roughness`, m). Caches a small NetCDF per grid under `cache_dir` (default `~/.cache/deepscale`): first use of a grid needs network, matching-grid reuse is fully offline, a grid change rebuilds. Raises `RuntimeError` if no tile is reachable and no cache exists; `ValueError` for a `like` without 1-D lat/lon or with <2 points along either.
 
 ## IO helpers
 
