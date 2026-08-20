@@ -77,7 +77,7 @@ result.tercile_forecast; result.skill_report.scores; result.metadata
 | `ds.prediction_error_variance(cv_preds, obs)` | Per-cell PEV from CV residuals | `(lat,lon)` |
 | `ds.flex_forecast(det_fcst, pev, obs, threshold)` | Exceedance probability P(Y > threshold) | `FlexForecastResult` |
 
-Downscale methods: `bcsd`, `cca`, `qm`, `dqm`, `delta`, `climatology`, `rank-analog`, `corrdiff` (GPU). Ensemble strategies: `uniform`, `skill_weighted`, `bma`, `drop_worst`. CV schemes: `loyo`, `lko`, `blocked`, `expanding`. Metrics: `rpss`, `roc`, `groc`, `reliability`, `hss`, `pearson_r`, `spearman`, `2afc`, `rmse`, `msss`, `crpss`, `spread_error_ratio`, `spread_error_correlation` (+ presets `"svslrf"`, `"all"`). Also exported: `ds.seasonal_coefficients` — the fitted Kharin-2017 seasonally-smoothed regression coefficient field behind the `smoothed_regression` calibrator (see [references/methods.md](references/methods.md)). Full parameter tables: [references/methods.md](references/methods.md), [references/metrics-and-terciles.md](references/metrics-and-terciles.md).
+Downscale methods: `bcsd`, `cca`, `qm`, `dqm`, `delta`, `climatology`, `rank-analog`, `chelsa` (precipitation; terrain + wind auxiliaries), `corrdiff` (GPU). Ensemble strategies: `uniform`, `skill_weighted`, `bma`, `drop_worst`. CV schemes: `loyo`, `lko`, `blocked`, `expanding`. Metrics: `rpss`, `roc`, `groc`, `reliability`, `hss`, `pearson_r`, `spearman`, `2afc`, `rmse`, `msss`, `crpss`, `spread_error_ratio`, `spread_error_correlation` (+ presets `"svslrf"`, `"all"`). Also exported: `ds.seasonal_coefficients` — the fitted Kharin-2017 seasonally-smoothed regression coefficient field behind the `smoothed_regression` calibrator (see [references/methods.md](references/methods.md)). Full parameter tables: [references/methods.md](references/methods.md), [references/metrics-and-terciles.md](references/metrics-and-terciles.md).
 
 ## Analog completion & climate positioning (SMPG)
 
@@ -95,7 +95,7 @@ ds.plot_accumulation_scenarios(result, climatology=clim)
 ```
 
 - **Analog selection** (`ds.analogs_from_years / _from_index / _from_field / where`) → an `AnalogSet` (scores every candidate, composes with `&` `|` `.top(n)`).
-- **Climate positioning** (`ds.percentile_of`, `ds.rank_of_record`, `ds.frequency_below`, `ds.accumulate`, `ds.seasonal_reduce`, `ds.seasonal_stack`) → where a value sits in a reference record.
+- **Climate positioning** (`ds.percentile_of`, `ds.percent_of_normal`, `ds.rank_of_record`, `ds.frequency_below`, `ds.accumulate`, `ds.seasonal_reduce`, `ds.seasonal_stack`) → where a value sits in a reference record.
 - **Scenario completion** (`ds.complete` → `CompletionResult`) → one plausible end-of-season per analog; omit `forecast=` and run twice to isolate what a dynamic forecast adds.
 - **Scalar-series calibration** (`ds.quantile_map`, `ds.error_bounds`) → bias-correct / bracket a forecast index, not a field.
 - **Teleconnection indices** (`ds.Index`) now cover `wvg`, `wvg2`, `nino12/3/34/4`, `oni`, `roni`, `dmi` (`iod`), `wtio`, `setio`, `wio`, `wpac`, with configurable `transform=` (`"standardize"`/`"anomaly"`/`"raw"`), `weights=` (`"cos_lat"`), and `baseline=` — see [references/api.md](references/api.md).
@@ -114,6 +114,7 @@ Calendar helpers (`deepscale.time.season_step`, `season_bounds`, dekad/pentad ar
 5. **`primary_metric` must be a leaf metric** — `roc_an`, not `roc` (which expands to a dict).
 6. **DL methods** (`requires_training=True`) refuse inline fitting: `ds.train(name, ..., save_to=path)` then `ds.downscale(..., weights_path=path)`.
 7. **Mask discipline when comparing forecasts:** RPSS masks its climatology reference only where *obs* is NaN, so forecasts with different NaN footprints are silently scored over different cell sets (a uniform-1/3 forecast has scored +0.26 this way). Apply one common valid mask to every forecast and the obs before scoring, and self-check that a uniform `[1/3,1/3,1/3]` forecast scores ≈ 0 — see [references/metrics-and-terciles.md](references/metrics-and-terciles.md).
+8. **CHELSA atmospheric leakage:** `chelsa` fits wind/PBL climatologies using training years only. A production `forecast_atmosphere=` override must already be a 2-D `(lat,lon)` Dataset; year/time-bearing fields are rejected so a CV call cannot silently use held-out ERA5.
 
 ## Getting data in (rosetta)
 
@@ -147,6 +148,7 @@ obs = rosetta.fetch("obs/era5", "precip", region=[-5, 15, 33, 48],
 - [examples/ensemble_and_reporting.py](examples/ensemble_and_reporting.py) — strategies, safeguards, skill comparison, plots
 - [examples/smoothed_calibration.py](examples/smoothed_calibration.py) — Kharin-2017 function layer in a manual honest-CV loop: gamma→normal, fit/smooth a·b, CRPSS
 - [examples/analog_completion.py](examples/analog_completion.py) — SMPG workflow: seasonal_stack → analogs_from_index/where → complete → CompletionResult (consensus, percentile, rank-of-record)
+- `examples/demo_chelsa.py` — real Rwanda MAM precipitation: C3S/CHIRPS + GLO-90 DEM + ERA5 wind/PBL + official CHELSA exposure; compares reduced/full-paper paths, checks conservation, and writes PNG/NetCDF
 
 ## Reference files
 
