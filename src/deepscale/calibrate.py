@@ -22,6 +22,11 @@ Registered methods:
   occurrence on a scalar predictor index (e.g. the WVG SST index); averaged
   across models. Supports independent-binomial and multinomial formulations,
   detrend (via the index), and a significance mask.
+- ``smoothed_regression`` — Kharin et al. (2017) seasonally-smoothed coefficient
+  postprocessing (season-aware, deterministic or tercile output). Multi-model
+  dicts are pooled into ONE super-ensemble rather than averaged per model, and
+  the hindcast fit can target a hindcast year (``forecast_year=``) or an
+  out-of-sample forecast ensemble (``forecast=``).
 """
 from __future__ import annotations
 
@@ -385,14 +390,14 @@ def _select_forecast_year_slice(source, forecast_year):
     return source.expand_dims(year=[forecast_year])
 
 
-def _split_ereg_predictor(predictor, forecast):
+def _split_ereg_predictor(predictor, forecast, method="ereg"):
     """Return {model: (hindcast, forecast)} from pair or alias-style inputs."""
     predictors = _as_model_dict(predictor)
     forecasts = None if forecast is None else _as_model_dict(forecast)
 
     if forecasts is not None and set(predictors) != set(forecasts):
         raise ValueError(
-            f"calibrate(method='ereg'): forecast keys {sorted(forecasts)} must "
+            f"calibrate(method={method!r}): forecast keys {sorted(forecasts)} must "
             f"match predictor model keys {sorted(predictors)}."
         )
 
@@ -402,7 +407,7 @@ def _split_ereg_predictor(predictor, forecast):
             hcst, embedded_fcst = value
         elif isinstance(value, tuple):
             raise ValueError(
-                "calibrate(method='ereg') predictor values must be "
+                f"calibrate(method={method!r}) predictor values must be "
                 "(hindcast, forecast) pairs."
             )
         else:
@@ -672,6 +677,78 @@ def _calibrate_logit(predictor, obs, *, forecast=None, forecast_year=None,
     return out
 
 
+def _concat_super_ensemble(ensembles):
+    """Concat DataArrays along ``member`` with globally unique integer member ids
+    (a member-less entry contributes one member). Order follows the input order."""
+    reindexed, offset = [], 0
+    for e in ensembles:
+        if "member" in e.dims:
+            n = e.sizes["member"]
+            e = e.assign_coords(member=list(range(offset, offset + n)))
+        else:
+            n = 1
+            e = e.expand_dims(member=[offset])
+        offset += n
+        reindexed.append(e)
+    return xr.concat(reindexed, dim="member")
+
+
+def _normalize_smoothed_forecast(forecast):
+    """Strip the (at most singleton) ``year`` dim/coord from an out-of-sample
+    forecast field so it broadcasts as a plain (season, [member,] lat, lon) target."""
+    if "year" in forecast.dims:
+        if forecast.sizes["year"] != 1:
+            raise ValueError(
+                "smoothed_regression: `forecast` must be a single target field "
+                "(season, [member,] lat, lon), optionally with a length-1 year dim; "
+                f"got a year dim of size {forecast.sizes['year']}."
+            )
+        forecast = forecast.isel(year=0, drop=True)
+    if "year" in forecast.coords:
+        forecast = forecast.drop_vars("year")
+    return forecast
+
+
+def _pool_smoothed_super_ensemble(predictor, forecast):
+    """Resolve smoothed_regression's multi-model entry shapes into a single pooled
+    ``(hindcast, forecast)`` pair.
+
+    Accepts the ereg-style shapes — ``{model: (hindcast, forecast)}``,
+    ``{model: hindcast}`` with ``forecast=None`` or ``{model: forecast}``, or a bare
+    ``(hindcast, forecast)`` tuple — and pools members across models into one
+    super-ensemble with reindexed member ids (hindcast years intersected across
+    models first). A bare DataArray predictor passes through unchanged."""
+    if isinstance(predictor, xr.DataArray) and not isinstance(forecast, dict):
+        return predictor, forecast
+    models = _split_ereg_predictor(predictor, forecast, method="smoothed_regression")
+
+    with_fcst = [name for name, (_h, f) in models.items() if f is not None]
+    if with_fcst and len(with_fcst) != len(models):
+        missing = sorted(set(models) - set(with_fcst))
+        raise ValueError(
+            f"calibrate(method='smoothed_regression'): models {missing} have no "
+            "forecast — the pooled super-ensemble needs a forecast from every model "
+            "(or from none, for hindcast-mode `forecast_year` targeting)."
+        )
+
+    hindcasts = [h for h, _f in models.values()]
+    common = hindcasts[0]["year"].values
+    for h in hindcasts[1:]:
+        common = np.intersect1d(common, h["year"].values)
+    if common.size == 0:
+        raise ValueError(
+            "calibrate(method='smoothed_regression'): the model hindcasts share "
+            "no common years — the pooled super-ensemble needs an overlapping "
+            "hindcast window."
+        )
+    pooled_h = _concat_super_ensemble([h.sel(year=common) for h in hindcasts])
+    pooled_f = None
+    if with_fcst:
+        pooled_f = _concat_super_ensemble(
+            [_normalize_smoothed_forecast(f) for _h, f in models.values()])
+    return pooled_h, pooled_f
+
+
 @register_calibrator("smoothed_regression")
 def _calibrate_smoothed_regression(predictor, obs, *, forecast=None, forecast_year=None,
                                    combine="mean", output_type="deterministic",
@@ -708,20 +785,55 @@ def _calibrate_smoothed_regression(predictor, obs, *, forecast=None, forecast_ye
     `methods.smoothed_regression.fit_ab_field`: True (default) sizes the spread
     coefficient analytically; False numerically minimizes mean Gaussian CRPS.
 
-    Round 1 is fit-and-apply on the hindcast (like ereg): the target year must be one of
-    the years present in `predictor`, and a separate out-of-sample `forecast` field is not
-    yet supported. Cross-validated scoring is a caller concern."""
+    Two targeting modes (mutually exclusive):
+
+    - ``forecast_year=`` (hindcast-mode, like ereg's retro-forecasts): the target year
+      must be one of the years present in `predictor`, and the calibrated field is the
+      re-scaled hindcast for that year.
+    - ``forecast=`` (out-of-sample, round 2 / issue #5): a separate forecast ensemble
+      ``(season, member, lat, lon)`` — member optional for deterministic output,
+      required for tercile — not in the obs years (a singleton ``year`` dim is
+      tolerated and squeezed). The (a, b) fit, climatologies, tercile boundaries, and
+      gamma parameters all come from the hindcast; only the application target changes.
+
+    The predictor and obs are aligned to their common years before fitting, so a
+    hindcast carrying extra years (e.g. beyond the obs record) is trimmed rather than
+    raising a broadcast error.
+
+    Multi-model entry (pooled super-ensemble): `predictor` may also be an ereg-style
+    ``{model: (hindcast, forecast)}`` dict (or ``{model: hindcast}`` with
+    ``forecast={model: forecast}``). Members are pooled across models with reindexed
+    member ids into ONE super-ensemble — the Kharin experiment design — not calibrated
+    per model and averaged like ereg/logit.
+
+    Cross-validated scoring is a caller concern."""
     if output_type not in ("deterministic", "tercile"):
         raise NotImplementedError(
             f"smoothed_regression: unknown output_type={output_type!r}. Supported "
             "output_type values are 'deterministic' and 'tercile'."
         )
-    if forecast is not None:
-        raise NotImplementedError(
-            "smoothed_regression does not yet accept a separate out-of-sample `forecast` "
-            "field; it targets a year within the provided hindcast `predictor`. Pass the "
-            "target via `forecast_year`."
+    predictor, forecast = _pool_smoothed_super_ensemble(predictor, forecast)
+    if forecast is not None and forecast_year is not None:
+        # after pooling, so forecasts embedded in {model: (hindcast, forecast)}
+        # tuples conflict too instead of silently shadowing forecast_year
+        raise ValueError(
+            "smoothed_regression: `forecast` and `forecast_year` are mutually "
+            "exclusive — pass `forecast_year` to target a hindcast year (with "
+            "hindcast-only predictors), or `forecast` to apply the hindcast fit "
+            "to an out-of-sample ensemble."
         )
+    if forecast is not None:
+        forecast = _normalize_smoothed_forecast(forecast)
+
+    common_years = np.intersect1d(predictor["year"].values, obs["year"].values)
+    if common_years.size == 0:
+        raise ValueError(
+            "smoothed_regression: predictor hindcast and obs share no common years."
+        )
+    if predictor.sizes["year"] != common_years.size:
+        predictor = predictor.sel(year=common_years)
+    if obs.sizes["year"] != common_years.size:
+        obs = obs.sel(year=common_years)
 
     if output_type == "deterministic":
         from .methods.smoothed_regression import seasonal_coefficients
@@ -729,23 +841,28 @@ def _calibrate_smoothed_regression(predictor, obs, *, forecast=None, forecast_ye
         fbar = predictor.mean("member") if "member" in predictor.dims else predictor
         f_clim = fbar.mean("year")
         o_clim = obs.mean("year")
-        year = int(forecast_year) if forecast_year is not None else int(fbar["year"].max())
-        hindcast_years = set(int(y) for y in fbar["year"].values)
-        if year not in hindcast_years:
-            raise ValueError(
-                f"forecast_year={year} is not in the hindcast years "
-                f"[{min(hindcast_years)}..{max(hindcast_years)}]. smoothed_regression (round 1) "
-                "targets a year within the provided hindcast."
-            )
-        f_target = fbar.sel(year=year)
+        if forecast is not None:
+            f_target = forecast.mean("member") if "member" in forecast.dims else forecast
+        else:
+            year = int(forecast_year) if forecast_year is not None else int(fbar["year"].max())
+            hindcast_years = set(int(y) for y in fbar["year"].values)
+            if year not in hindcast_years:
+                raise ValueError(
+                    f"forecast_year={year} is not in the hindcast years "
+                    f"[{min(hindcast_years)}..{max(hindcast_years)}]. Pass the target's "
+                    "ensemble via `forecast=` to apply the hindcast fit out-of-sample."
+                )
+            f_target = fbar.sel(year=year)
         calibrated = o_clim + a * (f_target - f_clim)          # (season, lat, lon)
         calibrated.attrs["method"] = "smoothed_regression"
         calibrated.attrs["temporal_sigma"] = "None" if temporal_sigma is None else str(temporal_sigma)
+        calibrated.attrs["out_of_sample"] = str(forecast is not None)
         return calibrated
 
     return _calibrate_smoothed_regression_tercile(
-        predictor, obs, forecast_year=forecast_year, temporal_sigma=temporal_sigma,
-        distribution=distribution, constrained=constrained, verbose=verbose,
+        predictor, obs, forecast=forecast, forecast_year=forecast_year,
+        temporal_sigma=temporal_sigma, distribution=distribution,
+        constrained=constrained, verbose=verbose,
     )
 
 
@@ -784,8 +901,9 @@ def _gamma_transform_field(x, shape, scale):
     return out
 
 
-def _calibrate_smoothed_regression_tercile(predictor, obs, *, forecast_year, temporal_sigma,
-                                           distribution, constrained, verbose=False):
+def _calibrate_smoothed_regression_tercile(predictor, obs, *, forecast, forecast_year,
+                                           temporal_sigma, distribution, constrained,
+                                           verbose=False):
     """``output_type="tercile"`` path for smoothed_regression: mean/spread scaling (a, b)
     fit per (season, lat, lon) (`methods.smoothed_regression.fit_ab_field`), smoothed
     across seasons (`smooth_ab`), applied to the resolved forecast year, and turned into
@@ -795,7 +913,10 @@ def _calibrate_smoothed_regression_tercile(predictor, obs, *, forecast_year, tem
     `_calibrate_smoothed_regression`'s docstring for the normal/gamma distinction.
 
     Fit-and-apply on the full hindcast (no leave-one-out), consistent with the
-    deterministic path: the target year must be one of the years present in `predictor`.
+    deterministic path: the target is either a year present in `predictor`
+    (``forecast_year``) or a separate out-of-sample ensemble ``forecast``
+    (season, member, lat, lon) pushed through the hindcast-fitted (a, b), gamma
+    parameters, and tercile boundaries.
     """
     from .methods import smoothed_regression as pb
 
@@ -810,16 +931,26 @@ def _calibrate_smoothed_regression_tercile(predictor, obs, *, forecast_year, tem
     lat = predictor["lat"].values
     lon = predictor["lon"].values
 
-    year = int(forecast_year) if forecast_year is not None else int(predictor["year"].max())
-    hindcast_years = set(int(y) for y in predictor["year"].values)
-    if year not in hindcast_years:
-        raise ValueError(
-            f"forecast_year={year} is not in the hindcast years "
-            f"[{min(hindcast_years)}..{max(hindcast_years)}]. smoothed_regression (round 1) "
-            "targets a year within the provided hindcast."
-        )
-    yi = int(np.where(predictor["year"].values == year)[0][0])
+    yi = None
+    if forecast is not None:
+        if "member" not in forecast.dims:
+            raise ValueError(
+                "smoothed_regression output_type='tercile' requires an ensemble "
+                "`forecast` with a 'member' dimension (to estimate the ensemble spread)."
+            )
+        forecast = forecast.transpose("season", "member", "lat", "lon")
+    else:
+        year = int(forecast_year) if forecast_year is not None else int(predictor["year"].max())
+        hindcast_years = set(int(y) for y in predictor["year"].values)
+        if year not in hindcast_years:
+            raise ValueError(
+                f"forecast_year={year} is not in the hindcast years "
+                f"[{min(hindcast_years)}..{max(hindcast_years)}]. Pass the target's "
+                "ensemble via `forecast=` to apply the hindcast fit out-of-sample."
+            )
+        yi = int(np.where(predictor["year"].values == year)[0][0])
 
+    mu_fc = sigma_fc = None
     if distribution == "gamma":
         # Fit the gamma to the obs, then map every ensemble member and the obs through the
         # gamma CDF into standard-normal space *before* reducing over "member" — not just
@@ -830,10 +961,19 @@ def _calibrate_smoothed_regression_tercile(predictor, obs, *, forecast_year, tem
         mu_f = pred_hat.mean(axis=2)             # ensemble mean, normal space (s,y,lat,lon)
         sigma_f = pred_hat.std(axis=2)           # ensemble spread, normal space
         o = obs_hat
+        if forecast is not None:
+            # the forecast members go through the HINDCAST-fitted gamma — same
+            # climate, out-of-sample application.
+            fc_hat = _gamma_transform_field(forecast.values, shape, scale)  # (s,m,lat,lon)
+            mu_fc = fc_hat.mean(axis=1)
+            sigma_fc = fc_hat.std(axis=1)
     elif distribution == "normal":
         mu_f = predictor.values.mean(axis=2)
         sigma_f = predictor.values.std(axis=2)
         o = obs.values
+        if forecast is not None:
+            mu_fc = forecast.values.mean(axis=1)
+            sigma_fc = forecast.values.std(axis=1)
     else:
         raise ValueError(
             f"smoothed_regression output_type='tercile': unknown distribution="
@@ -860,8 +1000,12 @@ def _calibrate_smoothed_regression_tercile(predictor, obs, *, forecast_year, tem
     a, b = pb.fit_ab_field(mu_anom, sigma_f, o_anom, constrained=constrained)
     a, b = pb.smooth_ab(a, b, temporal_sigma)
 
-    mu_ho = a * mu_anom[:, yi]                    # (season, lat, lon)
-    sig_ho = np.abs(b) * sigma_f[:, yi]
+    if forecast is not None:
+        mu_ho = a * (mu_fc - f_clim)              # (season, lat, lon)
+        sig_ho = np.abs(b) * sigma_fc
+    else:
+        mu_ho = a * mu_anom[:, yi]                # (season, lat, lon)
+        sig_ho = np.abs(b) * sigma_f[:, yi]
 
     probs = pb.normal_category_probs(mu_ho, sig_ho, t_lo, t_hi)   # (3, season, lat, lon)
 
@@ -874,6 +1018,8 @@ def _calibrate_smoothed_regression_tercile(predictor, obs, *, forecast_year, tem
     out.attrs["distribution"] = distribution
     out.attrs["constrained"] = bool(constrained)
     out.attrs["temporal_sigma"] = "None" if temporal_sigma is None else str(temporal_sigma)
+    out.attrs["out_of_sample"] = str(forecast is not None)
     if verbose:
-        print(f"[calibrate:smoothed_regression] tercile ({distribution}) forecast_year={year}")
+        target = "out-of-sample forecast" if forecast is not None else f"forecast_year={year}"
+        print(f"[calibrate:smoothed_regression] tercile ({distribution}) {target}")
     return out
