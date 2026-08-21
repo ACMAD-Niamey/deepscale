@@ -26,6 +26,7 @@ uv pip install -e ../rosetta                  # clone rosetta alongside deepscal
 | `uv run python examples/demo_train_inference.py` | Separated train / inference, with a custom registered method |
 | `uv run python examples/demo_probabilistic_method.py` | A custom probabilistic method scored by counting tercile members |
 | `uv run python examples/demo_ensemble_regression.py --synthetic` | `calibrate(method="ereg")`: ensemble-regression tercile probabilities |
+| `uv run python examples/demo_smoothed_forecast.py` | `calibrate(method="smoothed_regression")`: real-time out-of-sample forecast, pooled multi-model super-ensemble |
 | `uv run python examples/demo_logistic_wvg.py --synthetic` | `calibrate(LogitConfig(...))`: WVG-index logistic tercile probabilities |
 | `uv run python examples/seasonal_forecast_eastafrica_mam.py --dry-run` | The full multi-phase MME pipeline, plan only (`--tiny` runs it on synthetic data) |
 

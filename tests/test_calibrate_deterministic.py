@@ -76,11 +76,14 @@ def test_smoothed_regression_out_of_sample_year_raises_clear_error():
                             output_type="deterministic", forecast_year=2099)
 
 
-def test_smoothed_regression_separate_forecast_field_rejected():
+def test_smoothed_regression_separate_forecast_field_accepted():
+    # Round 2 (issue #5): a separate out-of-sample forecast ensemble is applied
+    # through the hindcast fit instead of raising NotImplementedError.
     fc, ob = _cube()
-    with pytest.raises(NotImplementedError, match="separate out-of-sample"):
-        deepscale.calibrate(fc, ob, method="smoothed_regression",
-                            output_type="deterministic", forecast=fc.isel(year=-1))
+    out = deepscale.calibrate(fc, ob, method="smoothed_regression",
+                              output_type="deterministic", forecast=fc.isel(year=-1))
+    assert out.dims == ("season", "lat", "lon")
+    assert bool(np.isfinite(out).all())
 
 
 def test_smoothed_regression_unknown_output_type_raises():

@@ -75,8 +75,9 @@ ds.plot_terciles(probs, title="WVG-calibrated MAM precip")
 # Rescales the ensemble-mean anomaly with a per-cell regression coefficient
 # smoothed ACROSS the seasonal cycle. Inputs carry a `season` dim this method
 # owns: hindcast (season, year, member, lat, lon), obs (season, year, lat, lon),
-# same grid. Fit-and-apply on the hindcast: forecast_year must be a year present
-# in the hindcast (no separate out-of-sample forecast= field yet; CV is caller's).
+# same grid. The fit always comes from the hindcast (CV is caller's); the target
+# is EITHER forecast_year= (a year present in the hindcast, retro-forecast) OR
+# forecast= (an out-of-sample ensemble, real-time) -- mutually exclusive.
 #
 # temporal_sigma: None (per-season) | float (cyclic Gaussian smoothing) |
 #                 "constant" (one year-round coefficient).
@@ -103,6 +104,28 @@ probs = ds.calibrate(
     forecast_year=2024,
 )
 assert probs.sizes["tercile"] == 3
+
+# Real-time: apply the hindcast fit to an out-of-sample forecast ensemble
+# (e.g. OND 2026 vs a 1993-2020 hindcast). Members go through the
+# hindcast-fitted coefficients, gamma parameters, and tercile boundaries.
+probs_rt = ds.calibrate(
+    hindcast, obs,
+    method="smoothed_regression",
+    output_type="tercile",
+    distribution="gamma",
+    forecast=forecast_members,           # (season, member, lat, lon), not in obs years
+)
+
+# Multi-model: ereg-style {model: (hindcast, forecast)} dict, but members are
+# POOLED across models into one super-ensemble (reindexed member ids), not
+# calibrated per model and averaged.
+probs_mme = ds.calibrate(
+    {"SPEAR": (spear_hcst, spear_fcst), "CanSIPS": (cansips_hcst, cansips_fcst)},
+    obs,
+    method="smoothed_regression",
+    output_type="tercile",
+    distribution="gamma",
+)
 
 # Inspect the fitted, smoothed coefficient field directly:
 a = ds.seasonal_coefficients(hindcast, obs, temporal_sigma=1.5)   # (season, lat, lon)

@@ -172,7 +172,7 @@ probs = deepscale.calibrate(
 
 Implements the postprocessing method of Kharin, Merryfield, Boer & Lee (2017, *Mon. Wea. Rev.* 145, 3545–3561). It rescales the ensemble-mean anomaly with a per-grid-cell regression coefficient, but where `ereg` fits each season independently, `smoothed_regression` smooths the coefficients *across the seasonal cycle* to suppress the sampling error that a ~30-year record leaves in each season's estimate. This recovers, and often improves, skill in weakly predictable regimes where naive per-season calibration degrades it.
 
-It is season-aware: inputs carry a `season` dimension (up to 12 rolling seasons) that this method owns. `temporal_sigma` sets the smoothing: `None` per-season, a float for cyclic Gaussian smoothing across the calendar, or `"constant"` for a single year-round coefficient. It is fit-and-apply (cross-validation is the caller's concern, as with `ereg`).
+It is season-aware: inputs carry a `season` dimension (up to 12 rolling seasons) that this method owns. `temporal_sigma` sets the smoothing: `None` per-season, a float for cyclic Gaussian smoothing across the calendar, or `"constant"` for a single year-round coefficient. The fit always comes from the hindcast (cross-validation is the caller's concern, as with `ereg`); the target is either a hindcast year (`forecast_year=`, retro-forecast/evaluation) or a separate out-of-sample forecast ensemble (`forecast=`, real-time). The two selectors are mutually exclusive.
 
 Two output modes via `output_type`:
 
@@ -194,9 +194,22 @@ probs = deepscale.calibrate(
     distribution="gamma",                # "normal" for temperature, "gamma" for precipitation
     forecast_year=2024,
 )
+
+# Real-time: apply the hindcast fit to an out-of-sample forecast ensemble
+# (e.g. OND 2026 against a 1993-2020 hindcast). The forecast members go through
+# the hindcast-fitted coefficients, gamma parameters, and tercile boundaries.
+probs_2026 = deepscale.calibrate(
+    hindcast, obs,
+    method="smoothed_regression",
+    output_type="tercile",
+    distribution="gamma",
+    forecast=forecast_members,           # (season, member, lat, lon), not in obs years
+)
 ```
 
 The probabilistic mode additionally calibrates the forecast spread and, for precipitation, works through a gamma distribution so probabilities never fall on negative rainfall. `deepscale.seasonal_coefficients(hindcast, obs, temporal_sigma=...)` exposes the fitted, smoothed coefficient field for inspection or plotting.
+
+Multi-model input uses the same `{model: (hindcast, forecast)}` shape as `ereg`, but where `ereg` calibrates each model separately and averages the tercile maps, `smoothed_regression` pools the members across models into one super-ensemble (with reindexed member ids) and calibrates that, matching the Kharin et al. experiment design. Hindcast years are intersected across models and with the obs before fitting.
 
 Runnable examples: `examples/demo_ensemble_regression.py` (eReg) and `examples/demo_logistic_wvg.py` (logit).
 
